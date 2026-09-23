@@ -1,67 +1,108 @@
 # depthlm-distill-h200
 
-DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업단 H200, GitHub Issue → Jenkins)에서 돌리기 위한 저장소.
-교사 라벨링은 로컬에서 끝낸 결과(`pools/*/teacher_labels.parquet`)를 포함하므로 컨테이너에서는 **학생 학습·평가만** 돌린다 (VRAM ≈ 10 GB, MIG 16 GB 슬라이스로 충분).
+Distilling the metric depth ability of DepthLM (Pixtral-12B) into a Qwen2.5-VL-3B student with LoRA,
+packaged to run unattended on the Aerodrone H200 service (GitHub issue → Jenkins → container).
 
-## 이슈(요청서) 작성 값 — Aerodrone-H200 저장소의 "컨테이너 생성 및 코드 실행 요청" 템플릿
+Two questions are studied on three image pools (indoor, driving, mixed 50/50):
 
-| 항목 | 값 |
+1. **Query-budget allocation.** With the number of teacher queries fixed, is it better to label many images
+   with few pixels each or few images with many pixels each? Grid: images N ∈ {400, 1600, 6400} ×
+   pixels per image k ∈ {1, 4, 16}, N·k ≤ 25,600 (8 nested cells).
+2. **Training signal.** Cross-entropy on the teacher's single answer (`hard`) versus KL to the teacher's
+   digit distribution (`soft`).
+
+Everything else is held fixed: pixel lists, teacher labels, steps, initialization, shuffle seed,
+label format (one decimal), input focal length 750 and midpoint decoding. ETH3D is fully held out.
+
+Korean version of this page: [docs/README_ko.md](docs/README_ko.md).
+
+## Running on Aerodrone H200
+
+Fill the "container creation and code execution request" issue as follows.
+
+| Field | Value |
 |---|---|
-| 사용자 ID | `johnhong06` |
-| GitHub 링크 | `https://github.com/johnhong06/depthlm-distill-h200.git` |
-| 사용 이미지 | `kau/pytorch-master` (CUDA 13, torch 2.11) |
-| 사용 언어 | `Python` (예시 이슈와 동일. bash 스크립트를 실행해도 Python 으로 적음) |
-| 추가 필요 모듈 (칸이 있을 때만) | `transformers==5.16.1 peft==0.20.0 pyarrow pyyaml tabulate` — 칸이 없어도 `run.sh` 가 시작할 때 스스로 설치함 |
-| 실행 명령어 | 아래 표 |
-| GPU 할당량 | 아래 표 (`1` = 18 GB 슬라이스, `7` = GPU 한 장 통째) |
+| Username | `johnhong06` |
+| GitHub link | `https://github.com/johnhong06/depthlm-distill-h200.git` |
+| Image | `kau/pytorch-master` (CUDA 13, torch 2.11) |
+| Language | `Python` |
+| Extra modules (if the field exists) | `transformers==5.16.1 peft==0.20.0 pyarrow pyyaml tabulate` — `run.sh` installs them itself when missing |
+| Command and GPU | see below |
 
-| 이슈 | 실행 명령어 | GPU | 비고 |
+| Issue | Command | GPU | What it does |
 |---|---|---|---|
-| ① 스모크 | `bash run.sh smoke` | 1 | 모델 다운로드 → 30 스텝 → 3 px 평가. 10 분. 데이터 불필요 |
-| ② 전체 체인 | `bash run.sh all hf_xxxxxxxx` | **7** | 혼합 격자 soft·hard → 실내·실외 라벨링(교사 30 GB × 4 병렬) → 실내·실외 격자 4개. 한 단계가 실패해도 다음으로 넘어감. 토큰은 라벨링에만 쓰이며 읽기 전용, 끝나면 폐기 |
+| 1 smoke | `bash run.sh smoke` | 1 (18 GB slice) | Downloads the student, trains 30 steps on the bundled 40-image pool, evaluates 3 pixels. ~10 min. Needs no data. |
+| 2 full chain | `bash run.sh all` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
 
-나눠서 내고 싶으면 단계별 명령도 그대로 쓸 수 있다: `bash run.sh grid <mixed|indoor|outdoor> <soft|hard>`, `bash run.sh label <indoor|outdoor> hf_xxx`. 격자는 저장소의 `pools/<pool>/teacher_labels.parquet` 가 없으면 파드에서 만든 `/app/output/labels/<pool>/teacher_labels.parquet` 를 쓴다. 이미 끝난 셀·평가·라벨은 건너뛰므로 같은 명령을 다시 내면 이어서 돈다.
+Notes.
 
-- 신청 창 안에서 이슈를 순서대로 낸다. 컨테이너는 끝나면 삭제되고 `/app/output/` 만 남는다(관리자에게 파일 요청). 리포트는 65,000자까지만 오므로 표준 출력은 요약, 전체 로그는 `/app/output/` 에 쓴다. 격자마다 `results_<cond>_<pool>.zip`(체크포인트·평가·표·그림·로그) 이 만들어지고 라벨은 `labels/<pool>/teacher_labels.parquet` 에 남는다. 관리자에게 zip 6개와 라벨 2개를 요청하면 된다.
-- 데이터는 사업단이 `/app/data/` 에 넣어 준 tar 분할본을 첫 실행 때 `/app/output/data/` 에 푼다(미리 풀어 두면 그대로 씀). 모델 가중치는 실행 중 Hugging Face 에서 받는다(학생 Apache-2.0, 토큰 불필요; 교사는 gated → 라벨링 명령의 4번째 인자).
-- GPU `7` 이면 스크립트가 자동으로 학습 8 병렬·라벨링 4 병렬로 돈다(`NPROC`, `NPROC_LABEL` 로 변경 가능). `1` 이면 순차.
+- `all` runs each stage as a child process; a failed stage does not stop the next one. Re-submitting the same
+  command resumes: finished cells, evaluations and label shards are skipped.
+- On a whole GPU the script trains 8 cells and evaluates 8 cells concurrently and labels with 4 teacher
+  processes (≈30 GB each). On an 18 GB slice everything runs sequentially. Override with `NPROC`, `NPROC_LABEL`.
+- Stages can also be submitted one at a time: `bash run.sh grid <mixed|indoor|outdoor> <soft|hard>` and
+  `bash run.sh label <indoor|outdoor>`. A grid uses `pools/<pool>/teacher_labels.parquet` from the repository
+  if present, otherwise `/app/output/labels/<pool>/teacher_labels.parquet` produced by the labeling stage.
+- Stdout is a summary only (the issue report is capped at 65,000 characters); full logs go to `/app/output`.
 
-## 실험 목록 (6 작업)
+### Data and secrets
 
-| 작업 | POOL | COND | 내용 | 상태 |
-|---|---|---|---|---|
-| 1 | indoor | soft | 실내 풀, 분포(KL) 증류, 8셀 | 풀 포함, 라벨링 필요 (MODE=label) |
-| 2 | outdoor | soft | 주행 풀, 분포 증류, 8셀 | 풀 포함, 라벨링 필요 |
-| 3 | mixed | soft | 실내 50 / 주행 50 풀, 분포 증류, 8셀 | 포함 (로컬에서도 진행 중) |
-| 4 | indoor | hard | 실내 풀, greedy(CE) 증류 | 풀 포함, 라벨링 필요 |
-| 5 | outdoor | hard | 주행 풀, greedy 증류 | 풀 포함, 라벨링 필요 |
-| 6 | mixed | hard | 혼합 풀, greedy 증류 | 포함 |
+- The image data (6.0 GB, four tar parts + `SHA256SUMS`) is delivered to the service administrator and placed
+  directly under `/app/data/`. The first run extracts it once to `/app/output/data/`. Layout after extraction:
+  `pool/{sunrgbd,kitti,distill_pool}/…` (13,080 training images) and `eval/{ibims1,nyuv2,eth3d}/…` (757 images).
+  Ground-truth depth is not shipped as files; the evaluation pixels and their depth values are in `ref/`.
+- The student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB) is downloaded at run time without a token.
+- The teacher `facebook/DepthLM` is gated. Labeling needs a **read-only** Hugging Face token that has accepted
+  the model license. Provide it either as an argument (`bash run.sh all hf_xxx`) or as a file
+  `/app/data/hf_token.txt` placed by the administrator, which keeps it out of the repository and the issue.
+  Revoke the token after the labeling stage. Never commit a token: this repository is public.
+- Downloaded weights are cached in `/app/output/hf` so later jobs do not download them again.
+  To avoid Hugging Face entirely, put local copies under `/app/data/models/Qwen2.5-VL-3B-Instruct` and
+  `/app/data/models/DepthLM`.
 
-풀: mixed 6,400장/3,697장면(실내 50·주행 50), indoor 6,400장/5,867장면, outdoor 6,400장/509장면(주행은 장면 수가 509에서 포화 → N 축 상단은 같은 장면의 프레임 추가, 한계로 명시). 격자 8셀: 이미지 수 N ∈ {400, 1600, 6400} × 이미지당 픽셀 k ∈ {1, 4, 16}, N·k ≤ 25,600. 셀당 2 epoch, LoRA r16, 학생 입력 초점 750.
-예상 시간(RTX PRO 4500 기준 0.46 s/step): 작업당 학습 ≈ 19 h + 평가 ≈ 9 h. H200 은 이보다 짧을 것으로 예상(실측 필요).
+### Outputs (`/app/output`)
 
-## 환경
-
-- Python ≥ 3.10, `pip install -r requirements.txt` (torch 는 CUDA 에 맞는 빌드로; transformers 5.16.1, peft ≥ 0.20 고정)
-- 모델: `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB, 자동 다운로드). 교사 `facebook/DepthLM` 은 이 저장소의 학습·평가에서는 **불필요** (라벨이 포함됨).
-- 격자 작업은 HF_TOKEN 이 필요 없다(학생 모델 Apache-2.0). 라벨링 작업만 교사(gated) 다운로드에 읽기 전용 토큰이 필요하다.
-- 기본 이미지: 사업단 `kau/pytorch-master`. 추가 모듈은 requirements.txt 의 한 줄.
-- 데이터: `data/pool/…` (풀 이미지), `data/eval/{ibims1,nyuv2,eth3d}/…` (평가). `DATA_ROOT` 로 위치 변경 가능.
-
-## 결과 (results/)
-
-| 경로 | 내용 |
+| Path | Content |
 |---|---|
-| `results/checkpoints/<cond>_<cell>_f750/` | LoRA 어댑터 (`adapter_model.safetensors`, `lora_adapter.pt`, `train.log`) |
-| `results/eval/eval_<cond>_<cell>_f750[_large].parquet` | 픽셀별 예측·GT·불확실도 |
-| `results/tables/table_grid_<cond>_f750[_large].md` | 셀별 δ1·CI, 행·열·고정예산 쌍대 비교 |
-| `results/figures/fig_grid_<cond>_f750[_large].png` | 예산 대 δ1 |
-| `results/run_*.log`, `results/train_*.log`, `results/eval_*.log` | 로그 |
+| `checkpoints/<cond>_<cell>_<pool>_f750/` | LoRA adapter (`adapter_model.safetensors`), `train.log` |
+| `eval/eval_<cond>_<cell>_<pool>_f750[_large].parquet` | Per-pixel prediction, ground truth, uncertainty |
+| `tables/table_grid_<cond>_<pool>_f750[_large].md` | δ1 with 95% image-cluster bootstrap CI per cell; row, column and equal-budget paired comparisons |
+| `figures/fig_grid_<cond>_<pool>_f750[_large].png` | δ1 versus budget |
+| `labels/<pool>/teacher_labels.parquet` | Teacher pseudo-labels produced on the service |
+| `results_<cond>_<pool>.zip` | Everything above for one grid, plus logs |
+| `run_*.log`, `train_*.log`, `eval_*.log` | Logs |
 
-## 공정 비교 규칙
+Ask the administrator for the six zip files and the two label files when the chain finishes.
 
-같은 풀 안의 모든 셀·손실은 같은 픽셀 목록·같은 교사 라벨·같은 스텝·초기화·셔플 시드를 쓴다. 셀 간 차이는 N·k 뿐이고, 손실 간 차이는 학습 목표(교사 숫자 CE vs 교사 자릿수 분포 KL)뿐이다. ETH3D 는 완전 held-out.
+## Experiments
 
-## 라이선스
+| Pool | Images / scenes | Domain | Labels |
+|---|---|---|---|
+| `mixed` | 6,400 / 3,697 | indoor 50 %, driving 50 % (matches DepthLM's per-dataset sampling) | included, 44,800 px |
+| `indoor` | 6,400 / 5,867 | SUN RGB-D, NYUv2 | produced on the service |
+| `outdoor` | 6,400 / 509 | KITTI (scene count saturates at 509; upper N cells add frames of the same drives, reported as a limitation) | produced on the service |
 
-코드 MIT. DepthLM 은 FAIR Noncommercial Research License(교사 라벨 생성에 사용, 비상업 연구 목적). 데이터셋(SUN RGB-D, NYUv2, KITTI, iBims-1, ETH3D)은 각 원 라이선스(비상업 연구)를 따르며 재배포하지 않는다.
+Grid cells: `N400_k1 N400_k4 N400_k16 N1600_k1 N1600_k4 N1600_k16 N6400_k1 N6400_k4`, nested (image order fixed,
+pixel indices 0..k−1 shared). Student: Qwen2.5-VL-3B-Instruct + LoRA r16 α32 on q/k/v/o, AdamW 1e-4 cosine,
+batch 1 × accumulation 8, 2 epochs, seed fixed. Evaluation: `small` = 300 / 320 / 302 pixels
+(iBims-1 / NYUv2 / ETH3D), `large` = 3,000 / 2,000 / 4,503 pixels. Metric: δ1 (max(p/g, g/p) < 1.25).
+
+Measured on an RTX PRO 4500: 0.46 s per training step, ≈10 GB VRAM per cell; teacher labeling 0.8–1.0 s per pixel,
+≈30 GB VRAM. H200 timings are to be measured.
+
+## Local run
+
+```bash
+pip install -r requirements.txt          # on top of a CUDA build of torch
+bash run.sh smoke                        # no data needed
+DATA_ROOT=/path/to/data bash run.sh grid mixed soft
+```
+
+`DATA_ROOT` must contain `pool/` and `eval/` (or the tar parts). Results go to `./results` unless `OUT_ROOT` is set.
+
+## License and attribution
+
+Code outside `third_party/` is MIT (see `LICENSE`). `third_party/DepthLM_Official/utils/` is vendored from
+DepthLM under CC BY-NC 4.0; the DepthLM checkpoint is used under the FAIR Noncommercial Research License and
+only for noncommercial research. Datasets are used under their own noncommercial licenses and are not
+redistributed. See `NOTICE`.

@@ -1,0 +1,25 @@
+depthlm-distill-h200
+Copyright (c) 2026 Jihyuck Hong. Code in this repository outside third_party/ is
+released under the MIT License (see LICENSE).
+
+This repository includes or depends on the following third-party work.
+
+1. DepthLM (Meta Platforms, Inc.)
+   - third_party/DepthLM_Official/utils/ is vendored from
+     https://github.com/facebookresearch/DepthLM and is licensed under
+     CC BY-NC 4.0 (see third_party/DepthLM_Official/LICENSE).
+   - The teacher checkpoint facebook/DepthLM (Pixtral-12B based) is distributed
+     under the FAIR Noncommercial Research License. It is used only to produce
+     pseudo-labels for noncommercial research. Any publication that uses this
+     repository must acknowledge DepthLM.
+
+2. Qwen2.5-VL-3B-Instruct (Alibaba Cloud), Apache License 2.0. Used as the
+   student model and downloaded from Hugging Face at run time.
+
+3. Datasets. SUN RGB-D, NYU Depth v2, KITTI, iBims-1 and ETH3D images are used
+   under their respective noncommercial research licenses and are NOT
+   redistributed in this repository. Only pixel coordinates, ground-truth depth
+   values at those pixels and teacher pseudo-labels are stored here.
+
+4. Python packages: PyTorch (BSD-3), transformers and peft (Apache-2.0),
+   pandas, pyarrow, numpy, scikit-learn, matplotlib, tabulate (BSD/MIT/PSF).

@@ -16,9 +16,13 @@ export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data ] && echo /app/data || echo $PWD/
 for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -z "${HF_TOKEN:-}" ] && [ -f "$tf" ] && export HF_TOKEN=$(tr -d '[:space:]' < "$tf") && echo "[setup] HF token loaded from $tf"; done
 # 파드(/app/output 존재)에서는 HF 가중치 캐시를 /app/output/hf 에 두어 다음 작업이 재다운로드하지 않게 한다
 [ -d /app/output ] && export HF_HOME=${HF_HOME:-/app/output/hf}
-# 기본 이미지에 없는 모듈은 스스로 설치 (이슈의 "추가 모듈" 칸과 무관하게 동작). torch 는 건드리지 않는다
-python - <<'PYV' || { echo "[setup] requirements 설치 (torch 는 이미 만족하므로 건드리지 않음)"; pip install -q -r requirements.txt 2>&1 | tail -2; }
-import transformers, peft, pyarrow, yaml, tabulate; assert transformers.__version__ == "5.16.1", transformers.__version__
+# torch 가 2.5 미만이면(Docker Hub pytorch/pytorch:latest = 2.2.1) transformers 5 가 못 돌므로 cu128 빌드 2.11 로 교체 (호스트 드라이버 ≥ 570). 2.5 이상이면 손대지 않는다
+python - <<'PYV' || { echo "[setup] torch 가 오래됨 → torch 2.11 + torchvision 0.26 (cu128) 설치, 3 GB"; pip uninstall -y -q torchaudio torchtext torchdata >/dev/null 2>&1 || true; pip install -q "torch==2.11.0" "torchvision==0.26.0" --index-url https://download.pytorch.org/whl/cu128 2>&1 | tail -2; }   # 옛 torchaudio 는 새 torch 와 심볼이 안 맞아 import 를 깨뜨리므로 제거
+import torch; v = tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2]); assert v >= (2, 5), torch.__version__
+PYV
+# 기본 이미지에 없는 모듈은 스스로 설치 (이슈에 "추가 모듈" 칸이 없어도 동작)
+python - <<'PYV' || { echo "[setup] requirements 설치"; pip install -q -r requirements.txt 2>&1 | tail -2; }
+import transformers, peft, accelerate, pandas, pyarrow, yaml, sklearn, matplotlib, tabulate, cv2; assert transformers.__version__ == "5.16.1", transformers.__version__
 PYV
 python -c "import torch, transformers, peft; print(f'[setup] torch {torch.__version__} transformers {transformers.__version__} peft {peft.__version__} cuda {torch.cuda.is_available()}')"
 LOG=$OUT_ROOT/run_${MODE}_${POOL}_${COND}.log; say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
@@ -64,7 +68,8 @@ fi
 [ -d "$DATA_ROOT/models/DepthLM" ] && export TEACHER_MODEL=$DATA_ROOT/models/DepthLM
 say "MODE=$MODE POOL=$POOL COND=$COND FOCAL=$FOCAL DATA_ROOT=$DATA_ROOT OUT_ROOT=$OUT_ROOT"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader | tee -a "$LOG" || say "nvidia-smi 없음"
-GPU_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
+GPU_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || true)
+[ -n "${GPU_MB:-}" ] || GPU_MB=$(python -c "import torch;print(int(torch.cuda.get_device_properties(0).total_memory/2**20) if torch.cuda.is_available() else 0)")   # nvidia-smi 가 없는 이미지
 DEVS=($(nvidia-smi -L 2>/dev/null | grep -oE "MIG-[0-9a-f-]+" || true)); NDEV=${#DEVS[@]}   # MIG 슬라이스가 여러 개 보이면 셀을 슬라이스별로 분배
 NPROC_TRAIN=${NPROC:-$([ "${GPU_MB:-0}" -gt 100000 ] && echo 8 || { [ "$NDEV" -gt 1 ] && echo "$NDEV" || echo 1; })}; NPROC_LABEL=${NPROC_LABEL:-$([ "${GPU_MB:-0}" -gt 100000 ] && echo 4 || echo 1)}
 say "GPU ${GPU_MB} MiB, MIG 장치 $NDEV → 학습 병렬 $NPROC_TRAIN, 라벨링 병렬 $NPROC_LABEL"

@@ -1,7 +1,12 @@
-# 사업단 기본 이미지 kau/pytorch-master (torch 2.11, CUDA 13) 위에 추가로 필요한 것. 이슈의 "추가 필요 모듈" 칸에 한 줄로:
-#   transformers==5.16.1 peft==0.20.0 pyarrow pyyaml tabulate
+# 어떤 베이스 이미지든 run.sh 가 시작할 때 부족한 것을 스스로 설치한다.
+# torch 는 2.5 이상이면 그대로 쓰고, 그보다 낮으면(Docker Hub pytorch/pytorch:latest = 2.2.1) run.sh 가 cu128 2.11 로 교체한다.
 transformers==5.16.1
 peft==0.20.0
+accelerate>=1.0
+pandas
 pyarrow
 pyyaml
+scikit-learn
+matplotlib
 tabulate
+opencv-python-headless

@@ -24,14 +24,14 @@ Fill the "container creation and code execution request" issue as follows.
 |---|---|
 | Username | `johnhong06` |
 | GitHub link | `https://github.com/johnhong06/depthlm-distill-h200.git` |
-| Image | `kau/pytorch-master` (CUDA 13, torch 2.11) |
+| Image | `pytorch/pytorch:latest` (the only PyTorch option in the form). If it is the Docker Hub image (torch 2.2.1), `run.sh` replaces torch with 2.11 (cu128) at start-up, ~5 min; if it already has torch ≥ 2.5 nothing is replaced |
 | Language | `Python` |
-| Extra modules (if the field exists) | `transformers==5.16.1 peft==0.20.0 pyarrow pyyaml tabulate` — `run.sh` installs them itself when missing |
+| Extra modules | none needed in the form: `run.sh` installs `requirements.txt` itself when a module is missing |
 | Command and GPU | see below |
 
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
-| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Checks the token against DepthLM and the data repo, downloads and verifies the data pack, downloads the student, trains 30 steps on the bundled 40-image pool, evaluates 3 pixels. ~15 min. Works without a token too (then data and teacher checks are skipped). |
+| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), checks the token against DepthLM and the data repo, downloads and verifies the data pack, downloads the student, trains 30 steps on the bundled 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
 | 2 full chain | `bash run.sh all hf_xxx` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
 
 Notes.
@@ -96,8 +96,7 @@ Measured on an RTX PRO 4500: 0.46 s per training step, ≈10 GB VRAM per cell; t
 ## Local run
 
 ```bash
-pip install -r requirements.txt          # on top of a CUDA build of torch
-bash run.sh smoke                        # no data needed
+bash run.sh smoke                        # installs requirements itself; no data needed
 DATA_ROOT=/path/to/data bash run.sh grid mixed soft
 ```
 

@@ -11,9 +11,9 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 |---|---|
 | 사용자 ID | `johnhong06` |
 | GitHub 링크 | `https://github.com/johnhong06/depthlm-distill-h200.git` |
-| 사용 이미지 | `kau/pytorch-master` (CUDA 13, torch 2.11) |
+| 사용 이미지 | `pytorch/pytorch:latest` (양식에 있는 유일한 PyTorch 선택지). Docker Hub 이미지(torch 2.2.1)면 `run.sh` 가 시작할 때 torch 2.11(cu128)로 교체(약 5분), torch ≥ 2.5 면 손대지 않음 |
 | 사용 언어 | `Python` (예시 이슈와 동일. bash 스크립트를 실행해도 Python 으로 적음) |
-| 추가 필요 모듈 (칸이 있을 때만) | `transformers==5.16.1 peft==0.20.0 pyarrow pyyaml tabulate` — 칸이 없어도 `run.sh` 가 시작할 때 스스로 설치함 |
+| 추가 필요 모듈 | 양식에 칸 없음. `run.sh` 가 시작할 때 requirements.txt 를 스스로 설치 |
 | 실행 명령어 | 아래 표 |
 | GPU 할당량 | 아래 표 (`1` = 18 GB 슬라이스, `7` = GPU 한 장 통째) |
 
@@ -47,7 +47,7 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 - Python ≥ 3.10, `pip install -r requirements.txt` (torch 는 CUDA 에 맞는 빌드로; transformers 5.16.1, peft ≥ 0.20 고정)
 - 모델: `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB, 자동 다운로드). 교사 `facebook/DepthLM` 은 이 저장소의 학습·평가에서는 **불필요** (라벨이 포함됨).
 - 격자 작업은 HF_TOKEN 이 필요 없다(학생 모델 Apache-2.0). 라벨링 작업만 교사(gated) 다운로드에 읽기 전용 토큰이 필요하다.
-- 기본 이미지: 사업단 `kau/pytorch-master`. 추가 모듈은 requirements.txt 의 한 줄.
+- 기본 이미지: 양식의 `pytorch/pytorch:latest`. Docker Hub 이미지 그대로(torch 2.2.1, py3.10)에서 스모크 통과 확인(09-23).
 - 데이터: `data/pool/…` (풀 이미지), `data/eval/{ibims1,nyuv2,eth3d}/…` (평가). `DATA_ROOT` 로 위치 변경 가능.
 
 ## 결과 (results/)

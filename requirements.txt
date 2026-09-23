@@ -1,0 +1,14 @@
+torch>=2.5
+transformers==5.16.1
+peft>=0.20
+accelerate
+huggingface_hub
+numpy
+pandas
+pyarrow
+pyyaml
+pillow
+opencv-python-headless
+scikit-learn
+matplotlib
+tabulate

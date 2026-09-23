@@ -1,0 +1,6 @@
+dataset: eth3d
+jsonl: $DATA_ROOT/eval/eth3d/eth3d_val.jsonl
+image_folder: $DATA_ROOT/eval/eth3d
+pixels_per_image: 10
+model_path: facebook/DepthLM
+max_new_tokens: 128

@@ -1,0 +1,6 @@
+dataset: nyuv2
+jsonl: $DATA_ROOT/eval/nyuv2/nyuv2_val.jsonl
+image_folder: $DATA_ROOT/eval/nyuv2
+pixels_per_image: 10
+model_path: facebook/DepthLM
+max_new_tokens: 128

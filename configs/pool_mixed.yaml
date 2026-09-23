@@ -1,0 +1,5 @@
+dataset: pool
+jsonl: pools/mixed/pool.jsonl
+image_folder: $DATA_ROOT
+pixels_per_image: 16
+model_path: facebook/DepthLM

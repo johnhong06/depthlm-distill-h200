@@ -1,0 +1,82 @@
+{
+ "images": [
+  400,
+  1600,
+  6400
+ ],
+ "pixels": [
+  1,
+  4,
+  16
+ ],
+ "cells": [
+  {
+   "N": 400,
+   "k": 1,
+   "budget": 400,
+   "rows": "rows_N400_k1.parquet",
+   "tag": "N400_k1"
+  },
+  {
+   "N": 400,
+   "k": 4,
+   "budget": 1600,
+   "rows": "rows_N400_k4.parquet",
+   "tag": "N400_k4"
+  },
+  {
+   "N": 400,
+   "k": 16,
+   "budget": 6400,
+   "rows": "rows_N400_k16.parquet",
+   "tag": "N400_k16"
+  },
+  {
+   "N": 1600,
+   "k": 1,
+   "budget": 1600,
+   "rows": "rows_N1600_k1.parquet",
+   "tag": "N1600_k1"
+  },
+  {
+   "N": 1600,
+   "k": 4,
+   "budget": 6400,
+   "rows": "rows_N1600_k4.parquet",
+   "tag": "N1600_k4"
+  },
+  {
+   "N": 1600,
+   "k": 16,
+   "budget": 25600,
+   "rows": "rows_N1600_k16.parquet",
+   "tag": "N1600_k16"
+  },
+  {
+   "N": 6400,
+   "k": 1,
+   "budget": 6400,
+   "rows": "rows_N6400_k1.parquet",
+   "tag": "N6400_k1"
+  },
+  {
+   "N": 6400,
+   "k": 4,
+   "budget": 25600,
+   "rows": "rows_N6400_k4.parquet",
+   "tag": "N6400_k4"
+  }
+ ],
+ "caps": {
+  "kitti_dsel": 1000,
+  "kitti_raw": 200,
+  "kitti2012": 2,
+  "kitti2015": 2,
+  "sunrgbd_xtion": 5,
+  "nyuv2": 3
+ },
+ "seed": 0,
+ "n_images": 6400,
+ "n_scenes": 3697,
+ "n_label_px": 44800
+}

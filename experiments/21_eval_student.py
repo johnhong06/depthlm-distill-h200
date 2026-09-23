@@ -12,7 +12,7 @@ from depthlm_uncertainty.depthlm_data import DepthLMJsonl, draw_marker
 from depthlm_uncertainty.number_distribution import enumerate_number_distribution, _is_numeric_token
 from depthlm_uncertainty.uq_metrics import compute_aucs
 from depthlm_uncertainty.metrics import _FLOAT_RE
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); MODEL = os.environ.get("STUDENT_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
 PROMPT = ("The red arrow in the image points at a specific location. Estimate the distance from the camera to that location in meters. "
           "Answer with only a number, for example 2.35.")
 def resolve(p): p = os.path.expandvars(os.path.expanduser(p)); return p if os.path.isabs(p) else os.path.join(ROOT, p)

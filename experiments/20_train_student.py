@@ -13,7 +13,7 @@ from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration, get_
 from peft import LoraConfig, get_peft_model, PeftModel
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from depthlm_uncertainty.depthlm_data import DepthLMJsonl, draw_marker
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); MODEL = os.environ.get("STUDENT_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
 PROMPT = ("The red arrow in the image points at a specific location. Estimate the distance from the camera to that location in meters. "
           "Answer with only a number, for example 2.35.")
 STUDENT_FOCAL = 750.0   # 학생 입력 정규화 초점거리. 교사(750)와 동일 = 해상도 교란 제거 (2026-09-22 사용자 지적). --focal 로 변경 가능

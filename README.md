@@ -50,10 +50,12 @@ Notes.
 
 Everything the jobs need is one 30 GB tar, split into sixteen 2 GB parts (`depthlm_distill_h200_app_data.tar.part_00`
 … `part_15`, plus `SHA256SUMS_parts` and a note), shared with the service administrator through a Google Drive
-folder. The administrator only downloads the files into any folder under `/app/data/` (for example
-`/app/data/h200_share/`); nothing has to be extracted by hand. On the first run `run.sh` finds the parts, verifies
-their checksums, extracts them once to `/app/output/data/depthlm_distill_h200/` and later jobs reuse that copy.
-An already extracted `/app/data/depthlm_distill_h200/` or `/app/data/{pool,eval}` is used directly if present.
+folder. The administrator only downloads the files into any folder under `/app/data/`, either as the individual parts or
+as the zip file(s) that Google Drive produces for a folder download; nothing has to be extracted by hand. On the
+first run `run.sh` finds the parts (inside the zips if needed), verifies their checksums, extracts them once, in
+place when that folder is writable and otherwise to `/app/output/data/`, and later jobs reuse the extracted copy.
+An already extracted `depthlm_distill_h200/` folder or raw `models/DepthLM/` weights under `/app/data` are used
+directly if present.
 
 | Path inside the archive | Content |
 |---|---|

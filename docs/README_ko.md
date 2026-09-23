@@ -25,7 +25,7 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 나눠서 내고 싶으면 단계별 명령도 그대로 쓸 수 있다: `bash run.sh grid <mixed|indoor|outdoor> <soft|hard>`, `bash run.sh label <indoor|outdoor> hf_xxx`. 격자는 저장소의 `pools/<pool>/teacher_labels.parquet` 가 없으면 파드에서 만든 `/app/output/labels/<pool>/teacher_labels.parquet` 를 쓴다. 이미 끝난 셀·평가·라벨은 건너뛰므로 같은 명령을 다시 내면 이어서 돈다.
 
 - 신청 창 안에서 이슈를 순서대로 낸다. 컨테이너는 끝나면 삭제되고 `/app/output/` 만 남는다(관리자에게 파일 요청). 리포트는 65,000자까지만 오므로 표준 출력은 요약, 전체 로그는 `/app/output/` 에 쓴다. 격자마다 `results_<cond>_<pool>.zip`(체크포인트·평가·표·그림·로그) 이 만들어지고 라벨은 `labels/<pool>/teacher_labels.parquet` 에 남는다. 관리자에게 zip 6개와 라벨 2개를 요청하면 된다.
-- 비밀 없음(기본): 30 GB tar 를 2 GB 조각 16개로 나눠 드라이브로 전달. 관리자는 `/app/data` 아래 아무 폴더에 받아 두기만 하면 되고 `run.sh` 가 첫 실행 때 SHA256 검증 후 `/app/output/data/depthlm_distill_h200/` 에 한 번 풀어 재사용한다(이미지 6 GB + 교사 가중치 24 GB, FAIR 라이선스 사본 동봉 = 1.b.ii). 학생은 공개 모델이라 실행 중 내려받는다. 토큰 경로(`hf_…` 인자, `/app/data/hf_token.txt`)는 대안으로만 남겨 둔다.
+- 비밀 없음(기본): 30 GB tar 를 2 GB 조각 16개로 나눠 드라이브로 전달. 관리자는 `/app/data` 아래 아무 폴더에 받아 두기만 하면 된다(조각 그대로든 드라이브가 만든 zip이든). `run.sh` 가 첫 실행 때 조각을 찾아(zip 안이면 흘려 넣으며) SHA256 검증 후 한 번 푼다. 그 폴더가 쓰기 가능하면 제자리에, 아니면 `/app/output/data/` 에 풀고 이후 작업은 재사용한다(이미지 6 GB + 교사 가중치 24 GB, FAIR 라이선스 사본 동봉 = 1.b.ii). 학생은 공개 모델이라 실행 중 내려받는다. 토큰 경로(`hf_…` 인자, `/app/data/hf_token.txt`)는 대안으로만 남겨 둔다.
 - GPU `7` 이면 스크립트가 자동으로 학습 8 병렬·라벨링 4 병렬로 돈다(`NPROC`, `NPROC_LABEL` 로 변경 가능). `1` 이면 순차.
 
 ## 실험 목록 (6 작업)

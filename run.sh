@@ -27,15 +27,19 @@ PYV
 python -c "import torch, transformers, peft; print(f'[setup] torch {torch.__version__} transformers {transformers.__version__} peft {peft.__version__} cuda {torch.cuda.is_available()}')"
 LOG=$OUT_ROOT/run_${MODE}_${POOL}_${COND}.log; say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
 DATA_REPO=${DATA_REPO:-jh0624/depthlm-distill-data}
-if [ -n "${HF_TOKEN:-}" ]; then python - "$DATA_REPO" <<'PYT' | tee -a "$LOG"
+if [ -n "${HF_TOKEN:-}" ]; then TOKRC=0; python - "$DATA_REPO" > "$OUT_ROOT/token_check.txt" 2>&1 <<'PYT' || TOKRC=$?
 import sys; from huggingface_hub import HfApi
 api = HfApi(); who = "?"
 try: who = api.whoami()["name"]
-except Exception as e: print(f"!!! [setup] 토큰 무효: {type(e).__name__}"); sys.exit(0)
+except Exception as e: print(f"!!! [setup] 토큰 무효(만료·오타·삭제됨): {type(e).__name__}: {str(e).strip().splitlines()[-1][:120]}"); sys.exit(3)
 for kind, rid in (("model", "facebook/DepthLM"), ("dataset", sys.argv[1])):
     try: (api.model_info if kind == "model" else api.dataset_info)(rid); print(f"[setup] 토큰({who}) → {rid} 접근 OK")
     except Exception as e: print(f"!!! [setup] 토큰({who}) → {rid} 접근 실패: {type(e).__name__} (라이선스 동의·비공개 저장소 권한 확인)")
 PYT
+  cat "$OUT_ROOT/token_check.txt" | tee -a "$LOG"; rm -f "$OUT_ROOT/token_check.txt"
+  if [ "$TOKRC" = "3" ]; then unset HF_TOKEN   # 무효한 토큰을 그대로 두면 공개 모델 다운로드까지 401 로 막힌다
+    if [ "$MODE" = smoke ]; then say "!!! [setup] 토큰 없이 스모크 계속 (학생 모델은 공개). 새 토큰(만료 없음)으로 다시 요청할 것"
+    else say "!!! [setup] 토큰이 무효라 데이터·교사 다운로드가 불가능 → 종료. 새 토큰(만료 없음)으로 다시 요청할 것"; exit 1; fi; fi
 else say "[setup] HF 토큰 없음 — 학생 모델(공개)만 가능. 라벨링·데이터 팩 다운로드는 토큰 필요"; fi
 # 데이터 확보 순서: ① /app/data 에 풀려 있음 → ② 이전 작업이 /app/output/data 에 풀어 둠 → ③ /app/data 의 tar 분할본 → ④ HF 비공개 데이터셋(DATA_REPO)에서 토큰으로 내려받음
 if [ ! -d "$DATA_ROOT/pool" ]; then
@@ -67,9 +71,8 @@ fi
 [ -d "$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct" ] && export STUDENT_MODEL=$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct
 [ -d "$DATA_ROOT/models/DepthLM" ] && export TEACHER_MODEL=$DATA_ROOT/models/DepthLM
 say "MODE=$MODE POOL=$POOL COND=$COND FOCAL=$FOCAL DATA_ROOT=$DATA_ROOT OUT_ROOT=$OUT_ROOT"
-nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader | tee -a "$LOG" || say "nvidia-smi 없음"
-GPU_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || true)
-[ -n "${GPU_MB:-}" ] || GPU_MB=$(python -c "import torch;print(int(torch.cuda.get_device_properties(0).total_memory/2**20) if torch.cuda.is_available() else 0)")   # nvidia-smi 가 없는 이미지
+nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | tee -a "$LOG" || say "nvidia-smi 없음"
+GPU_MB=$(python -c "import torch;print(int(torch.cuda.get_device_properties(0).total_memory/2**20) if torch.cuda.is_available() else 0)")   # nvidia-smi 는 컨테이너에서 메모리 값을 못 줄 수 있어 torch 로 판정
 DEVS=($(nvidia-smi -L 2>/dev/null | grep -oE "MIG-[0-9a-f-]+" || true)); NDEV=${#DEVS[@]}   # MIG 슬라이스가 여러 개 보이면 셀을 슬라이스별로 분배
 NPROC_TRAIN=${NPROC:-$([ "${GPU_MB:-0}" -gt 100000 ] && echo 8 || { [ "$NDEV" -gt 1 ] && echo "$NDEV" || echo 1; })}; NPROC_LABEL=${NPROC_LABEL:-$([ "${GPU_MB:-0}" -gt 100000 ] && echo 4 || echo 1)}
 say "GPU ${GPU_MB} MiB, MIG 장치 $NDEV → 학습 병렬 $NPROC_TRAIN, 라벨링 병렬 $NPROC_LABEL"

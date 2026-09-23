@@ -47,6 +47,11 @@ if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위
   for p in indoor outdoor; do
     if [ -f pools/$p/teacher_labels.parquet ] || [ -f "$OUT_ROOT/labels/$p/teacher_labels.parquet" ]; then say "[all] $p 라벨 있음 — 라벨링 건너뜀"
     else [ -n "${HF_TOKEN:-}" ] || say "!!! [all] HF_TOKEN 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; fi; done
+  # 라벨링이 둘 다 끝났으면 토큰 사본을 지운다 (이후 격자는 토큰 불필요). /app/data 가 읽기 전용이면 관리자에게 삭제 요청. 실제 무효화는 HF 계정에서 Revoke 해야 한다
+  if [ -f "$OUT_ROOT/labels/indoor/teacher_labels.parquet" ] && [ -f "$OUT_ROOT/labels/outdoor/teacher_labels.parquet" ]; then
+    for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -f "$tf" ] && { rm -f "$tf" 2>/dev/null && say "[all] 토큰 파일 삭제됨: $tf" || say "!!! [all] 토큰 파일을 지우지 못함(읽기 전용): $tf — 관리자에게 삭제 요청"; }; done
+    unset HF_TOKEN; say "[all] 라벨링 완료 — 이후 단계는 토큰을 쓰지 않음. HF 설정에서 토큰을 Revoke 할 것"
+  else say "!!! [all] 라벨이 둘 다 없어 토큰 파일을 남겨 둠(재실행용)"; fi
   for p in indoor outdoor; do for c in soft hard; do say "[all] 격자 $p $c"; bash run.sh grid $p $c || say "!!! [all] 격자 실패 $p $c"; done; done
   say "[all] 완료. 결과 zip: $(ls "$OUT_ROOT"/results_*.zip 2>/dev/null | tr '\n' ' ')"; exit 0
 fi

@@ -5,8 +5,10 @@
 # 환경변수: DATA_ROOT(데이터 루트, 기본 ./data), OUT_ROOT(결과, 기본 ./results), FOCAL(750), CELLS(기본 arms.json 전체), EVAL_SETS("small large"),
 #           HF_TOKEN(gated 모델용), NPROC(병렬 학습 프로세스 수, MIG 슬라이스 격리 시 CUDA_VISIBLE_DEVICES 로 분배)
 set -euo pipefail; cd "$(dirname "$0")"; export PYTHONUNBUFFERED=1
-# 위치 인자: bash run.sh <smoke|label|grid> [pool] [cond] [hf_token]   (환경변수 MODE/POOL/COND/HF_TOKEN 도 동일하게 동작)
-MODE=${1:-${MODE:-smoke}}; POOL=${2:-${POOL:-mixed}}; COND=${3:-${COND:-soft}}; [ -n "${4:-}" ] && export HF_TOKEN=$4
+# 위치 인자: bash run.sh <smoke|label|grid|all> [pool] [cond] [hf_token]   (환경변수 MODE/POOL/COND/HF_TOKEN 도 동일하게 동작)
+# all = 혼합 격자 2개 → 실내·실외 라벨링(라벨이 없을 때만) → 실내·실외 격자 4개를 한 작업으로 이어서 실행
+ARGS=(); for a in "$@"; do case $a in hf_*) export HF_TOKEN=$a;; *) ARGS+=("$a");; esac; done   # hf_ 로 시작하는 인자는 위치와 무관하게 토큰
+MODE=${ARGS[0]:-${MODE:-smoke}}; POOL=${ARGS[1]:-${POOL:-mixed}}; COND=${ARGS[2]:-${COND:-soft}}
 FOCAL=${FOCAL:-750}; EVAL_SETS=${EVAL_SETS:-"small large"}; export HF_HUB_DISABLE_PROGRESS_BARS=1
 # 사업단 파드 규격: 데이터는 /app/data (읽기), 결과는 /app/output (파드 종료 후 보존). 없으면 로컬 기본값.
 export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data ] && echo /app/data || echo $PWD/data)}; export OUT_ROOT=${OUT_ROOT:-$([ -d /app/output ] && echo /app/output || echo $PWD/results)}; mkdir -p "$OUT_ROOT"
@@ -38,6 +40,14 @@ if [ "$MODE" = smoke ]; then
   python -u experiments/21_eval_student.py --tag smoke --adapter "$OUT_ROOT/checkpoints/soft_smoke" --focal "$FOCAL" --eval_set small --limit_img 1 --per_max 1 2>&1 | grep -vE "^\[transformers\]" | tee -a "$LOG"
   say "[smoke] 완료. 결과: $OUT_ROOT/eval/eval_smoke.parquet, 어댑터: $OUT_ROOT/checkpoints/soft_smoke"; exit 0
 fi
+if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위 실행이라 하나가 실패해도 다음으로 넘어간다
+  for c in soft hard; do say "[all] 격자 mixed $c"; bash run.sh grid mixed $c || say "!!! [all] 격자 실패 mixed $c"; done
+  for p in indoor outdoor; do
+    if [ -f pools/$p/teacher_labels.parquet ] || [ -f "$OUT_ROOT/labels/$p/teacher_labels.parquet" ]; then say "[all] $p 라벨 있음 — 라벨링 건너뜀"
+    else [ -n "${HF_TOKEN:-}" ] || say "!!! [all] HF_TOKEN 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; fi; done
+  for p in indoor outdoor; do for c in soft hard; do say "[all] 격자 $p $c"; bash run.sh grid $p $c || say "!!! [all] 격자 실패 $p $c"; done; done
+  say "[all] 완료. 결과 zip: $(ls "$OUT_ROOT"/results_*.zip 2>/dev/null | tr '\n' ' ')"; exit 0
+fi
 if [ "$MODE" = label ]; then   # 교사 라벨링: VRAM 28-30 GB → MIG 7 작업. 결과 라벨은 $OUT_ROOT/labels/<POOL>/teacher_labels.parquet (재개 가능)
   [ -d "$DATA_ROOT/pool" ] || { say "!!! DATA_ROOT 에 pool/ 없음"; exit 1; }; mkdir -p "$OUT_ROOT/labels/$POOL"
   say "[label] 풀 $POOL: $(python -c "import pandas as pd;print(len(pd.read_parquet('pools/$POOL/todo_label.parquet')))") px, 병렬 $NPROC_LABEL"
@@ -56,27 +66,33 @@ d.to_parquet(f"{out}/labels/{pool}/teacher_labels.parquet", index=False); print(
 PYS
   say "[label] 완료: $OUT_ROOT/labels/$POOL/teacher_labels.parquet"; exit 0
 fi
-# --- grid ---
-ARMS=pools/$POOL/arms.json; LABELS=pools/$POOL/teacher_labels.parquet; PCFG=configs/pool_${POOL}.yaml
+# --- grid ---  태그 = <cond>_<cell>_<pool>_f<focal>  (풀이 달라도 체크포인트·평가 파일이 겹치지 않음)
+SUFFIX=_${POOL}_f${FOCAL}; ARMS=pools/$POOL/arms.json; PCFG=configs/pool_${POOL}.yaml
+LABELS=pools/$POOL/teacher_labels.parquet; [ -f "$LABELS" ] || LABELS=$OUT_ROOT/labels/$POOL/teacher_labels.parquet   # 저장소에 없으면 파드에서 만든 라벨
 [ -f "$ARMS" ] && [ -f "$LABELS" ] && [ -f "$PCFG" ] || { say "!!! 풀 파일 없음: $ARMS $LABELS $PCFG"; exit 1; }
 [ -d "$DATA_ROOT/pool" ] && [ -d "$DATA_ROOT/eval" ] || { say "!!! DATA_ROOT 에 pool/ eval/ 없음 → scripts/fetch_data.sh 먼저"; exit 1; }
 CELLS=${CELLS:-$(python -c "import json;print(' '.join(c['tag'] for c in json.load(open('$ARMS'))['cells']))")}
-say "[grid] 셀: $CELLS"
-train_cell() { local cell=$1; local ad=$OUT_ROOT/checkpoints/${COND}_${cell}_f${FOCAL}
+say "[grid] 풀 $POOL 조건 $COND 라벨 $LABELS 셀: $CELLS"
+train_cell() { local cell=$1; local ad=$OUT_ROOT/checkpoints/${COND}_${cell}${SUFFIX}
   [ -f "$ad/adapter_model.safetensors" ] && { say "$cell 학습 완료됨 — 건너뜀"; return 0; }
-  say "학습 $COND $cell"; python -u experiments/20_train_student.py --cond "$COND" --epochs 2 --accum 8 --focal "$FOCAL" --labels "$LABELS" --pools "$PCFG" --rows "pools/$POOL/rows_$cell.parquet" --tag "_${cell}_f${FOCAL}" > "$OUT_ROOT/train_${COND}_${cell}.log" 2>&1 || say "!!! 학습 실패 $cell"; }
-if [ "$NPROC_TRAIN" -gt 1 ]; then   # GPU 한 장 통째: 셀 NPROC_TRAIN 개를 같은 GPU 에서 동시에 (셀당 ≈10 GB)
-  i=0; for cell in $CELLS; do train_cell "$cell" & i=$((i+1)); [ $((i % NPROC_TRAIN)) -eq 0 ] && wait; done; wait
-else for cell in $CELLS; do train_cell "$cell"; done; fi
-for cell in $CELLS; do ad=$OUT_ROOT/checkpoints/${COND}_${cell}_f${FOCAL}; [ -f "$ad/adapter_model.safetensors" ] || continue
-  for es in $EVAL_SETS; do suf=""; [ "$es" = large ] && suf=_large; [ -f "$OUT_ROOT/eval/eval_${COND}_${cell}_f${FOCAL}${suf}.parquet" ] && continue
-    say "평가 $COND $cell ($es)"; python -u experiments/21_eval_student.py --tag "${COND}_${cell}_f${FOCAL}" --adapter "$ad" --focal "$FOCAL" --eval_set "$es" > "$OUT_ROOT/eval_${COND}_${cell}_${es}.log" 2>&1 || say "!!! 평가 실패 $cell $es"; done; done
-for es in $EVAL_SETS; do python experiments/31_grid.py --cond "$COND" --suffix "_f${FOCAL}" --eval_set "$es" --arms "$ARMS" >> "$LOG" 2>&1 || say "!!! 표 실패 $es"; done
-say "[grid] 완료. 결과: $OUT_ROOT/{eval,tables,figures,checkpoints}"
-echo "===== 요약 (표) ====="; cat "$OUT_ROOT"/tables/table_grid_${COND}_f${FOCAL}.md 2>/dev/null | head -60
-python - "$OUT_ROOT" "results_${COND}_${POOL}" <<'PYS'
-import sys, os, zipfile, glob; root, name = sys.argv[1], sys.argv[2]
+  say "학습 $COND $cell"; python -u experiments/20_train_student.py --cond "$COND" --epochs 2 --accum 8 --focal "$FOCAL" --labels "$LABELS" --pools "$PCFG" --rows "pools/$POOL/rows_$cell.parquet" --tag "_${cell}${SUFFIX}" > "$OUT_ROOT/train_${COND}_${cell}${SUFFIX}.log" 2>&1 || say "!!! 학습 실패 $cell"; }
+eval_cell() { local cell=$1; local ad=$OUT_ROOT/checkpoints/${COND}_${cell}${SUFFIX}; [ -f "$ad/adapter_model.safetensors" ] || return 0
+  for es in $EVAL_SETS; do local suf=""; [ "$es" = large ] && suf=_large; [ -f "$OUT_ROOT/eval/eval_${COND}_${cell}${SUFFIX}${suf}.parquet" ] && continue
+    say "평가 $COND $cell ($es)"; python -u experiments/21_eval_student.py --tag "${COND}_${cell}${SUFFIX}" --adapter "$ad" --focal "$FOCAL" --eval_set "$es" ${EVAL_EXTRA:-} > "$OUT_ROOT/eval_${COND}_${cell}${SUFFIX}_${es}.log" 2>&1 || say "!!! 평가 실패 $cell $es"; done; }
+run_cells() { local fn=$1; if [ "$NPROC_TRAIN" -gt 1 ]; then   # GPU 한 장 통째: 셀 NPROC_TRAIN 개를 같은 GPU 에서 동시에 (학습 ≈10 GB, 평가 ≈8 GB)
+    local i=0; for cell in $CELLS; do $fn "$cell" & i=$((i+1)); [ $((i % NPROC_TRAIN)) -eq 0 ] && wait; done; wait
+  else for cell in $CELLS; do $fn "$cell"; done; fi; }
+run_cells train_cell; run_cells eval_cell
+for es in $EVAL_SETS; do python experiments/31_grid.py --cond "$COND" --suffix "$SUFFIX" --eval_set "$es" --arms "$ARMS" >> "$LOG" 2>&1 || say "!!! 표 실패 $es"; done
+say "[grid] 완료 $POOL $COND. 결과: $OUT_ROOT/{eval,tables,figures,checkpoints}"
+for es in $EVAL_SETS; do suf=""; [ "$es" = large ] && suf=_large; echo "===== 요약 $POOL $COND ($es) ====="; head -40 "$OUT_ROOT/tables/table_grid_${COND}${SUFFIX}${suf}.md" 2>/dev/null; done
+python - "$OUT_ROOT" "results_${COND}_${POOL}" "${COND}_" "$SUFFIX" <<'PYS'
+import sys, os, zipfile; root, name, cond, suffix = sys.argv[1:5]
 with zipfile.ZipFile(f"{root}/{name}.zip", "w", zipfile.ZIP_DEFLATED) as z:
-    for p in [q for d in ("eval", "tables", "figures", "checkpoints") for q in glob.glob(f"{root}/{d}/**", recursive=True) if os.path.isfile(q)] + glob.glob(f"{root}/*.log"): z.write(p, os.path.relpath(p, root))
+    for dp, dn, fn in os.walk(root):
+        dn[:] = [d for d in dn if d not in ("hf", "data", "labels")]
+        for f in fn:
+            rel = os.path.relpath(os.path.join(dp, f), root)
+            if (cond in rel and suffix in rel) or rel.startswith("run_"): z.write(os.path.join(dp, f), rel)
 print(f"zip: {root}/{name}.zip  {os.path.getsize(f'{root}/{name}.zip')/1e6:.1f} MB")
 PYS

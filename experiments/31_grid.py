@@ -69,4 +69,4 @@ for a_, ds in zip(ax, NAMES):
     a_.set_title(NAMES[ds], fontsize=10); a_.set_xlabel("teacher-label budget (pixels)"); a_.grid(alpha=0.3)
 ax[0].set_ylabel("δ1"); ax[0].legend(fontsize=8)
 fig.suptitle("Same budget → vertical gap between lines = allocation effect; along a line = more pixels on the same images", fontsize=9)
-fig.tight_layout(); fig.savefig(os.path.join(ROOT, f"{OUT}/figures/fig_grid_{args.cond}{args.suffix}{suf}.png"), dpi=150); print("figure saved")
+os.makedirs(os.path.join(ROOT, f"{OUT}/figures"), exist_ok=True); fig.tight_layout(); fig.savefig(os.path.join(ROOT, f"{OUT}/figures/fig_grid_{args.cond}{args.suffix}{suf}.png"), dpi=150); print("figure saved")

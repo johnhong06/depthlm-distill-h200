@@ -1,0 +1,17 @@
+{
+ "images": [
+  40
+ ],
+ "pixels": [
+  4
+ ],
+ "cells": [
+  {
+   "N": 40,
+   "k": 4,
+   "budget": 160,
+   "rows": "rows_smoke.parquet",
+   "tag": "smoke"
+  }
+ ]
+}

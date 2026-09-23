@@ -10,6 +10,13 @@ MODE=${1:-${MODE:-smoke}}; POOL=${2:-${POOL:-mixed}}; COND=${3:-${COND:-soft}}; 
 FOCAL=${FOCAL:-750}; EVAL_SETS=${EVAL_SETS:-"small large"}; export HF_HUB_DISABLE_PROGRESS_BARS=1
 # 사업단 파드 규격: 데이터는 /app/data (읽기), 결과는 /app/output (파드 종료 후 보존). 없으면 로컬 기본값.
 export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data ] && echo /app/data || echo $PWD/data)}; export OUT_ROOT=${OUT_ROOT:-$([ -d /app/output ] && echo /app/output || echo $PWD/results)}; mkdir -p "$OUT_ROOT"
+# 파드(/app/output 존재)에서는 HF 가중치 캐시를 /app/output/hf 에 두어 다음 작업이 재다운로드하지 않게 한다
+[ -d /app/output ] && export HF_HOME=${HF_HOME:-/app/output/hf}
+# 기본 이미지에 없는 모듈은 스스로 설치 (이슈의 "추가 모듈" 칸과 무관하게 동작). torch 는 건드리지 않는다
+python - <<'PYV' || { echo "[setup] requirements 설치 (torch 는 이미 만족하므로 건드리지 않음)"; pip install -q -r requirements.txt 2>&1 | tail -2; }
+import transformers, peft, pyarrow, yaml, tabulate; assert transformers.__version__ == "5.16.1", transformers.__version__
+PYV
+python -c "import torch, transformers, peft; print(f'[setup] torch {torch.__version__} transformers {transformers.__version__} peft {peft.__version__} cuda {torch.cuda.is_available()}')"
 # /app/data 에 tar 분할본만 있고 풀이 안 풀려 있으면 쓰기 가능한 곳에 풀어서 사용
 if [ ! -d "$DATA_ROOT/pool" ] && ls "$DATA_ROOT"/depthlm_distill_data.tar.part_* >/dev/null 2>&1; then
   mkdir -p "$OUT_ROOT/data"; cat "$DATA_ROOT"/depthlm_distill_data.tar.part_* | tar -xf - -C "$OUT_ROOT/data" --strip-components=1; export DATA_ROOT=$OUT_ROOT/data; fi

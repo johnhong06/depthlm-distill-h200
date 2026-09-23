@@ -1,14 +1,7 @@
-torch>=2.5
+# 사업단 기본 이미지 kau/pytorch-master (torch 2.11, CUDA 13) 위에 추가로 필요한 것. 이슈의 "추가 필요 모듈" 칸에 한 줄로:
+#   transformers==5.16.1 peft==0.20.0 pyarrow pyyaml tabulate
 transformers==5.16.1
-peft>=0.20
-accelerate
-huggingface_hub
-numpy
-pandas
+peft==0.20.0
 pyarrow
 pyyaml
-pillow
-opencv-python-headless
-scikit-learn
-matplotlib
 tabulate

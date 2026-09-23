@@ -19,13 +19,13 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 
 | 이슈 | 실행 명령어 | GPU | 비고 |
 |---|---|---|---|
-| ① 스모크 | `bash run.sh smoke hf_토큰` | 1 | 토큰으로 교사·데이터 저장소 접근 확인 → 데이터 팩 다운로드·검증·풀기 → 학생 다운로드 → 30 스텝 → 3 px 평가. 15 분 |
+| ① 스모크 | `bash run.sh smoke` | 1 | `/app/data` 의 팩 검증·풀기, 교사·학생 가중치 경로 출력 → 학생 다운로드 → 30 스텝 → 3 px 평가. 15 분 |
 | ② 전체 체인 | `bash run.sh all hf_토큰` | **7** | 혼합 격자 soft·hard → 실내·실외 라벨링(교사 30 GB × 4 병렬) → 실내·실외 격자 4개. 한 단계가 실패해도 다음으로 넘어감. 토큰은 라벨링에만 쓰이며 읽기 전용, 끝나면 폐기 |
 
 나눠서 내고 싶으면 단계별 명령도 그대로 쓸 수 있다: `bash run.sh grid <mixed|indoor|outdoor> <soft|hard>`, `bash run.sh label <indoor|outdoor> hf_xxx`. 격자는 저장소의 `pools/<pool>/teacher_labels.parquet` 가 없으면 파드에서 만든 `/app/output/labels/<pool>/teacher_labels.parquet` 를 쓴다. 이미 끝난 셀·평가·라벨은 건너뛰므로 같은 명령을 다시 내면 이어서 돈다.
 
 - 신청 창 안에서 이슈를 순서대로 낸다. 컨테이너는 끝나면 삭제되고 `/app/output/` 만 남는다(관리자에게 파일 요청). 리포트는 65,000자까지만 오므로 표준 출력은 요약, 전체 로그는 `/app/output/` 에 쓴다. 격자마다 `results_<cond>_<pool>.zip`(체크포인트·평가·표·그림·로그) 이 만들어지고 라벨은 `labels/<pool>/teacher_labels.parquet` 에 남는다. 관리자에게 zip 6개와 라벨 2개를 요청하면 된다.
-- 데이터(tar 분할본 4개 + SHA256SUMS, 6 GB)는 비공개 HF 데이터셋 `jh0624/depthlm-distill-data` 에 있고 첫 실행 때 토큰으로 내려받아 검증 후 `/app/output/data/` 에 푼다. 이후 작업은 풀린 것을 재사용한다. 관리자가 같은 파일을 `/app/data/` 에 넣어 두면 그것을 먼저 쓴다. 모델 가중치는 실행 중 HF 에서 받는다(학생 Apache-2.0 토큰 불필요, 교사 gated 는 같은 토큰). 토큰은 이슈 명령 인자로 한 번 넘기고 실험이 끝나면 HF 설정에서 삭제한다. 시작 시 토큰으로 두 저장소에 접근되는지 출력한다.
+- 비밀 없음 경로(기본): 관리자가 `/app/data/` 에 이미지 팩(6 GB + 추가 26 MB)과 교사 가중치 `models/DepthLM/`(24 GB, MODEL_LICENSE 동봉)을 넣어 두면 토큰이 전혀 필요 없다. 학생은 공개 모델이라 실행 중 내려받는다. 토큰 경로(`hf_…` 인자 또는 `/app/data/hf_token.txt`)는 HF 에서 팩·교사를 내려받는 대안으로만 남겨 둔다.
 - GPU `7` 이면 스크립트가 자동으로 학습 8 병렬·라벨링 4 병렬로 돈다(`NPROC`, `NPROC_LABEL` 로 변경 가능). `1` 이면 순차.
 
 ## 실험 목록 (6 작업)

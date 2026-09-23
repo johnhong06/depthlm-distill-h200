@@ -83,6 +83,8 @@ fi
 # 모델 가중치가 /app/data/models 에 있으면 그것을 쓰고, 없으면 Hugging Face 에서 내려받음 (인터넷 필요)
 [ -d "$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct" ] && export STUDENT_MODEL=$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct
 [ -d "$DATA_ROOT/models/DepthLM" ] && export TEACHER_MODEL=$DATA_ROOT/models/DepthLM
+for d in /app/data "$DATA_SRC"; do [ -d "$d/models/DepthLM" ] && export TEACHER_MODEL=$d/models/DepthLM; [ -d "$d/models/Qwen2.5-VL-3B-Instruct" ] && export STUDENT_MODEL=$d/models/Qwen2.5-VL-3B-Instruct; done
+echo "[setup] 교사 가중치: ${TEACHER_MODEL:-facebook/DepthLM (HF, 토큰 필요)} | 학생 가중치: ${STUDENT_MODEL:-Qwen/Qwen2.5-VL-3B-Instruct (HF 공개)}"
 say "MODE=$MODE POOL=$POOL COND=$COND FOCAL=$FOCAL DATA_ROOT=$DATA_ROOT OUT_ROOT=$OUT_ROOT"
 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | tee -a "$LOG" || say "nvidia-smi 없음"
 GPU_MB=$(python -c "import torch;print(int(torch.cuda.get_device_properties(0).total_memory/2**20) if torch.cuda.is_available() else 0)")   # nvidia-smi 는 컨테이너에서 메모리 값을 못 줄 수 있어 torch 로 판정
@@ -102,7 +104,7 @@ fi
 if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위 실행이라 하나가 실패해도 다음으로 넘어간다. 라벨링은 빠진 쌍만 한다
   say "[all] 라벨링 mixed (풀 v4 교체분 1,160 px)"; bash run.sh label mixed || say "!!! [all] 라벨링 실패 mixed"
   for c in soft hard; do say "[all] 격자 mixed $c"; bash run.sh grid mixed $c || say "!!! [all] 격자 실패 mixed $c"; done
-  for p in indoor outdoor; do [ -n "${HF_TOKEN:-}" ] || say "!!! [all] HF_TOKEN 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; done
+  for p in indoor outdoor; do [ -n "${HF_TOKEN:-}" ] || [ -n "${TEACHER_MODEL:-}" ] || say "!!! [all] 토큰도 로컬 교사 가중치도 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; done
   # 라벨링이 둘 다 끝났으면 토큰 사본을 지운다 (이후 격자는 토큰 불필요). /app/data 가 읽기 전용이면 관리자에게 삭제 요청. 실제 무효화는 HF 계정에서 Revoke 해야 한다
   if [ -f "$OUT_ROOT/labels/indoor/teacher_labels.parquet" ] && [ -f "$OUT_ROOT/labels/outdoor/teacher_labels.parquet" ]; then
     for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -f "$tf" ] && { rm -f "$tf" 2>/dev/null && say "[all] 토큰 파일 삭제됨: $tf" || say "!!! [all] 토큰 파일을 지우지 못함(읽기 전용): $tf — 관리자에게 삭제 요청"; }; done

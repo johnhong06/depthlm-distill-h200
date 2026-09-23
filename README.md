@@ -31,7 +31,7 @@ Fill the "container creation and code execution request" issue as follows.
 
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
-| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), checks the token against DepthLM and the data repo, downloads and verifies the data pack and the extra pack, downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
+| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), verifies and extracts the image packs from `/app/data`, reports which teacher and student weights will be used, downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
 | 2 full chain | `bash run.sh all hf_xxx` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
 
 Notes.
@@ -46,24 +46,25 @@ Notes.
   if present, otherwise `/app/output/labels/<pool>/teacher_labels.parquet` produced by the labeling stage.
 - Stdout is a summary only (the issue report is capped at 65,000 characters); full logs go to `/app/output`.
 
-### Data and token
+### Data and weights (no secrets)
 
-- The image data is one tar archive split into four parts (6.0 GB) plus `SHA256SUMS`, and a small extra archive
-  `depthlm_distill_data_extra.tar` (205 indoor images added by pool v4) plus `SHA256SUMS_extra`, stored in the
-  **private** Hugging Face dataset repo `jh0624/depthlm-distill-data`. On the first run the script downloads it with the token,
-  verifies the checksums, extracts it to `/app/output/data/` and deletes the download. Later jobs reuse the extracted
-  copy. Alternatively the administrator can place the same files directly under `/app/data/`, which is used first.
-  Layout after extraction: `pool/{sunrgbd,kitti,distill_pool}/…` (13,080 training images) and
-  `eval/{ibims1,nyuv2,eth3d}/…` (757 images). Ground-truth depth is not shipped as files; the evaluation pixels and
-  their depth values are in `ref/`.
-- One Hugging Face **read** token, created on the account that accepted the DepthLM license, is passed once as an
-  argument of the issue command (`hf_...`). It is used for the data pack and for the gated teacher
-  `facebook/DepthLM`; the student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0) needs no token. At start-up the script
-  prints whether the token can reach both repos, so a wrong token is caught in the smoke job. Revoke the token in
-  the Hugging Face settings when the chain has finished. Never commit a token: this repository is public.
-  (`/app/data/hf_token.txt` is also read if present.)
-- Downloaded weights are cached in `/app/output/hf` so later jobs do not download them again. To avoid Hugging Face
-  entirely, put local copies under `/app/data/models/Qwen2.5-VL-3B-Instruct` and `/app/data/models/DepthLM`.
+The service administrator places these under `/app/data/` once (visible to other users of the service, which is
+acceptable for research data and for weights that are distributed with their license); nothing secret is needed
+anywhere, so the repository and the request issues can stay public.
+
+| Path under `/app/data/` | Content |
+|---|---|
+| `depthlm_distill_data.tar.part_aa` … `_ad`, `SHA256SUMS` | image pack, 6.0 GB (13,080 training + 757 evaluation images) |
+| `depthlm_distill_data_extra.tar`, `SHA256SUMS_extra` | 205 indoor images added by pool v4, 26 MB |
+| `models/DepthLM/` (+ `MODEL_LICENSE`) | teacher weights, 24 GB, FAIR Noncommercial Research License |
+
+- The first run extracts the packs once to `/app/output/data/` and later jobs reuse that copy. Ground-truth depth is
+  not shipped as files; the evaluation pixels and their depth values are in `ref/`.
+- The student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB) is downloaded from Hugging Face without a token
+  and cached in `/app/output/hf`. A local copy under `/app/data/models/Qwen2.5-VL-3B-Instruct` is used if present.
+- Fallbacks that need a Hugging Face read token (`hf_…` argument or `/app/data/hf_token.txt`): downloading the image
+  packs from the private dataset repo `jh0624/depthlm-distill-data` and the gated teacher from `facebook/DepthLM`.
+  The script prints at start-up whether the token can reach both; an invalid token is dropped. Never commit a token.
 
 ### Outputs (`/app/output`)
 

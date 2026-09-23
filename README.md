@@ -10,8 +10,8 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 | 사용자 ID | `johnhong06` |
 | GitHub 링크 | `https://github.com/johnhong06/depthlm-distill-h200.git` |
 | 사용 이미지 | `kau/pytorch-master` (CUDA 13, torch 2.11) |
-| 사용 언어 | `Bash` |
-| 추가 필요 모듈 | `transformers==5.16.1 peft==0.20.0 pyarrow pyyaml tabulate` |
+| 사용 언어 | `Python` (예시 이슈와 동일. bash 스크립트를 실행해도 Python 으로 적음) |
+| 추가 필요 모듈 (칸이 있을 때만) | `transformers==5.16.1 peft==0.20.0 pyarrow pyyaml tabulate` — 칸이 없어도 `run.sh` 가 시작할 때 스스로 설치함 |
 | 실행 명령어 | 아래 표 |
 | GPU 할당량 | 아래 표 (`1` = 18 GB 슬라이스, `7` = GPU 한 장 통째) |
 

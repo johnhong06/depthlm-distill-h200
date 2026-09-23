@@ -21,7 +21,7 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 
 ## 데이터 전달 (사업단 `/app/data/`)
 
-tar 분할본 `depthlm_distill_data.tar.part_*` 을 `/app/data/` 에 그대로 두면 `run.sh` 가 첫 실행 때 `/app/output/data/` 에 풀어 쓴다. 미리 풀어 두는 경우의 레이아웃:
+tar 분할본 `depthlm_distill_data.tar.part_*`(총 약 5.8 GB, 풀 3개 이미지 + 평가셋)을 `/app/data/` 에 그대로 두면 `run.sh` 가 첫 실행 때 `/app/output/data/` 에 풀어 쓴다. 미리 풀어 두는 경우의 레이아웃:
 
 ```
 /app/data/pool/...   # 풀 이미지 (혼합·실내·실외 풀이 공유; sunrgbd/, kitti/, distill_pool/ 하위)
@@ -34,13 +34,13 @@ tar 분할본 `depthlm_distill_data.tar.part_*` 을 `/app/data/` 에 그대로 �
 | 작업 | POOL | COND | 내용 | 상태 |
 |---|---|---|---|---|
 | 1 | indoor | soft | 실내 풀, 분포(KL) 증류, 8셀 | 풀 포함, 라벨링 필요 (MODE=label) |
-| 2 | outdoor | soft | 주행 풀, 분포 증류, 8셀 | 풀 준비 중 (raw 프레임 재추출 후 추가) |
+| 2 | outdoor | soft | 주행 풀, 분포 증류, 8셀 | 풀 포함, 라벨링 필요 |
 | 3 | mixed | soft | 실내 50 / 주행 50 풀, 분포 증류, 8셀 | 포함 (로컬에서도 진행 중) |
 | 4 | indoor | hard | 실내 풀, greedy(CE) 증류 | 풀 포함, 라벨링 필요 |
-| 5 | outdoor | hard | 주행 풀, greedy 증류 | 풀 준비 중 |
+| 5 | outdoor | hard | 주행 풀, greedy 증류 | 풀 포함, 라벨링 필요 |
 | 6 | mixed | hard | 혼합 풀, greedy 증류 | 포함 |
 
-격자 8셀: 이미지 수 N ∈ {400, 1600, 6400} × 이미지당 픽셀 k ∈ {1, 4, 16}, N·k ≤ 25,600. 셀당 2 epoch, LoRA r16, 학생 입력 초점 750.
+풀: mixed 6,400장/3,697장면(실내 50·주행 50), indoor 6,400장/5,867장면, outdoor 6,400장/509장면(주행은 장면 수가 509에서 포화 → N 축 상단은 같은 장면의 프레임 추가, 한계로 명시). 격자 8셀: 이미지 수 N ∈ {400, 1600, 6400} × 이미지당 픽셀 k ∈ {1, 4, 16}, N·k ≤ 25,600. 셀당 2 epoch, LoRA r16, 학생 입력 초점 750.
 예상 시간(RTX PRO 4500 기준 0.46 s/step): 작업당 학습 ≈ 19 h + 평가 ≈ 9 h. H200 은 이보다 짧을 것으로 예상(실측 필요).
 
 ## 환경

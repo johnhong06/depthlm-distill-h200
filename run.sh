@@ -72,7 +72,7 @@ PYD
 if [ ! -d "$DATA_ROOT/pool" ]; then
   if [ -d "$OUT_ROOT/data/pool" ]; then export DATA_ROOT=$OUT_ROOT/data
   else
-    PACK=""; ls "$DATA_ROOT"/depthlm_distill_data.tar.part_* >/dev/null 2>&1 && PACK=$DATA_ROOT
+    PACK=""; for d in "$DATA_ROOT" /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PACK" ] && PACK=$(find "$d" -maxdepth 3 -name "depthlm_distill_data.tar.part_aa" -printf "%h\n" 2>/dev/null | head -1 || true); done
     if [ -z "$PACK" ] && [ -n "${HF_TOKEN:-}" ]; then
       echo "[data] $DATA_REPO 에서 데이터 팩 다운로드 (6 GB)"; mkdir -p "$OUT_ROOT/data_pack"
       hf_fetch "$OUT_ROOT/data_pack" "depthlm_distill_data.tar.part_*" "SHA256SUMS" && PACK=$OUT_ROOT/data_pack || echo "!!! [data] 다운로드 실패 — 토큰이 $DATA_REPO 를 읽을 수 있는지 확인"
@@ -85,7 +85,7 @@ if [ ! -d "$DATA_ROOT/pool" ]; then
   fi
 fi
 if [ -d "$DATA_ROOT/pool" ] && [ ! -f "$DATA_ROOT/.extra_done" ] && [ ! -f "$DATA_ROOT/extra_done.txt" ]; then   # 추가 팩 (실내 v4 새 이미지). 관리자 묶음에는 이미 포함(extra_done.txt)
-  EX=""; for d in /app/data "$DATA_SRC" "$DATA_ROOT"; do [ -f "$d/depthlm_distill_data_extra.tar" ] && EX=$d; done
+  EX=""; for d in /app/data "$DATA_SRC" "$DATA_ROOT"; do [ -d "$d" ] && [ -z "$EX" ] && EX=$(find "$d" -maxdepth 3 -name "depthlm_distill_data_extra.tar" -printf "%h\n" 2>/dev/null | head -1 || true); done
   if [ -z "$EX" ] && [ -n "${HF_TOKEN:-}" ]; then mkdir -p "$OUT_ROOT/data_pack"; hf_fetch "$OUT_ROOT/data_pack" "depthlm_distill_data_extra.tar" "SHA256SUMS_extra" >/dev/null 2>&1 || true; [ -f "$OUT_ROOT/data_pack/depthlm_distill_data_extra.tar" ] && EX=$OUT_ROOT/data_pack; fi
   if [ -n "$EX" ] && [ -w "$DATA_ROOT" ]; then
     [ -f "$EX/SHA256SUMS_extra" ] && { (cd "$EX" && sha256sum -c --quiet SHA256SUMS_extra) || { echo "!!! [data] 추가 팩 SHA256 불일치"; exit 1; }; }
@@ -96,7 +96,9 @@ fi
 # 모델 가중치가 /app/data/models 에 있으면 그것을 쓰고, 없으면 Hugging Face 에서 내려받음 (인터넷 필요)
 [ -d "$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct" ] && export STUDENT_MODEL=$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct
 [ -d "$DATA_ROOT/models/DepthLM" ] && export TEACHER_MODEL=$DATA_ROOT/models/DepthLM
-for d in /app/data "$DATA_SRC"; do [ -d "$d/models/DepthLM" ] && export TEACHER_MODEL=$d/models/DepthLM; [ -d "$d/models/Qwen2.5-VL-3B-Instruct" ] && export STUDENT_MODEL=$d/models/Qwen2.5-VL-3B-Instruct; done
+for d in /app/data "$DATA_SRC"; do [ -d "$d" ] || continue   # 관리자가 가중치를 tar 없이 그대로 받아 둔 경우: /app/data 아래 어느 폴더든 models/DepthLM 을 찾는다
+  [ -z "${TEACHER_MODEL:-}" ] && t=$(find -L "$d" -maxdepth 4 -type f -name "model.safetensors.index.json" -path "*DepthLM*" -printf "%h\n" 2>/dev/null | head -1 || true) && [ -n "$t" ] && export TEACHER_MODEL=$t
+  [ -z "${STUDENT_MODEL:-}" ] && q=$(find -L "$d" -maxdepth 4 -type d -name "Qwen2.5-VL-3B-Instruct" 2>/dev/null | head -1 || true) && [ -n "$q" ] && export STUDENT_MODEL=$q; done
 echo "[setup] 교사 가중치: ${TEACHER_MODEL:-facebook/DepthLM (HF, 토큰 필요)} | 학생 가중치: ${STUDENT_MODEL:-Qwen/Qwen2.5-VL-3B-Instruct (HF 공개)}"
 say "MODE=$MODE POOL=$POOL COND=$COND FOCAL=$FOCAL DATA_ROOT=$DATA_ROOT OUT_ROOT=$OUT_ROOT"
 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | tee -a "$LOG" || say "nvidia-smi 없음"

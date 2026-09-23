@@ -31,8 +31,8 @@ Fill the "container creation and code execution request" issue as follows.
 
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
-| 1 smoke | `bash run.sh smoke` | 1 (18 GB slice) | Downloads the student, trains 30 steps on the bundled 40-image pool, evaluates 3 pixels. ~10 min. Needs no data. |
-| 2 full chain | `bash run.sh all` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
+| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Checks the token against DepthLM and the data repo, downloads and verifies the data pack, downloads the student, trains 30 steps on the bundled 40-image pool, evaluates 3 pixels. ~15 min. Works without a token too (then data and teacher checks are skipped). |
+| 2 full chain | `bash run.sh all hf_xxx` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
 
 Notes.
 
@@ -45,20 +45,23 @@ Notes.
   if present, otherwise `/app/output/labels/<pool>/teacher_labels.parquet` produced by the labeling stage.
 - Stdout is a summary only (the issue report is capped at 65,000 characters); full logs go to `/app/output`.
 
-### Data and secrets
+### Data and token
 
-- The image data (6.0 GB, four tar parts + `SHA256SUMS`) is delivered to the service administrator and placed
-  directly under `/app/data/`. The first run extracts it once to `/app/output/data/`. Layout after extraction:
-  `pool/{sunrgbd,kitti,distill_pool}/…` (13,080 training images) and `eval/{ibims1,nyuv2,eth3d}/…` (757 images).
-  Ground-truth depth is not shipped as files; the evaluation pixels and their depth values are in `ref/`.
-- The student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB) is downloaded at run time without a token.
-- The teacher `facebook/DepthLM` is gated. Labeling needs a **read-only** Hugging Face token that has accepted
-  the model license. Provide it either as an argument (`bash run.sh all hf_xxx`) or as a file
-  `/app/data/hf_token.txt` placed by the administrator, which keeps it out of the repository and the issue.
-  Revoke the token after the labeling stage. Never commit a token: this repository is public.
-- Downloaded weights are cached in `/app/output/hf` so later jobs do not download them again.
-  To avoid Hugging Face entirely, put local copies under `/app/data/models/Qwen2.5-VL-3B-Instruct` and
-  `/app/data/models/DepthLM`.
+- The image data is one tar archive split into four parts (6.0 GB) plus `SHA256SUMS`, stored in the **private**
+  Hugging Face dataset repo `jh0624/depthlm-distill-data`. On the first run the script downloads it with the token,
+  verifies the checksums, extracts it to `/app/output/data/` and deletes the download. Later jobs reuse the extracted
+  copy. Alternatively the administrator can place the same files directly under `/app/data/`, which is used first.
+  Layout after extraction: `pool/{sunrgbd,kitti,distill_pool}/…` (13,080 training images) and
+  `eval/{ibims1,nyuv2,eth3d}/…` (757 images). Ground-truth depth is not shipped as files; the evaluation pixels and
+  their depth values are in `ref/`.
+- One Hugging Face **read** token, created on the account that accepted the DepthLM license, is passed once as an
+  argument of the issue command (`hf_...`). It is used for the data pack and for the gated teacher
+  `facebook/DepthLM`; the student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0) needs no token. At start-up the script
+  prints whether the token can reach both repos, so a wrong token is caught in the smoke job. Revoke the token in
+  the Hugging Face settings when the chain has finished. Never commit a token: this repository is public.
+  (`/app/data/hf_token.txt` is also read if present.)
+- Downloaded weights are cached in `/app/output/hf` so later jobs do not download them again. To avoid Hugging Face
+  entirely, put local copies under `/app/data/models/Qwen2.5-VL-3B-Instruct` and `/app/data/models/DepthLM`.
 
 ### Outputs (`/app/output`)
 

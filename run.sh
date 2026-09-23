@@ -12,7 +12,7 @@ MODE=${ARGS[0]:-${MODE:-smoke}}; POOL=${ARGS[1]:-${POOL:-mixed}}; COND=${ARGS[2]
 FOCAL=${FOCAL:-750}; EVAL_SETS=${EVAL_SETS:-"small large"}; export HF_HUB_DISABLE_PROGRESS_BARS=1
 # 사업단 파드 규격: 데이터는 /app/data (읽기), 결과는 /app/output (파드 종료 후 보존). 없으면 로컬 기본값.
 export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data ] && echo /app/data || echo $PWD/data)}; export OUT_ROOT=${OUT_ROOT:-$([ -d /app/output ] && echo /app/output || echo $PWD/results)}; mkdir -p "$OUT_ROOT"
-# 토큰 파일: 이슈 명령에 토큰을 적지 않으려면 관리자에게 hf_token.txt 를 /app/data/ 에 넣어 달라고 하면 된다 (저장소·이슈에 노출 없음)
+# 토큰: 기본은 이슈 명령 인자(hf_...). 대안으로 /app/data/hf_token.txt 파일도 읽는다
 for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -z "${HF_TOKEN:-}" ] && [ -f "$tf" ] && export HF_TOKEN=$(tr -d '[:space:]' < "$tf") && echo "[setup] HF token loaded from $tf"; done
 # 파드(/app/output 존재)에서는 HF 가중치 캐시를 /app/output/hf 에 두어 다음 작업이 재다운로드하지 않게 한다
 [ -d /app/output ] && export HF_HOME=${HF_HOME:-/app/output/hf}
@@ -21,18 +21,54 @@ python - <<'PYV' || { echo "[setup] requirements 설치 (torch 는 이미 만족
 import transformers, peft, pyarrow, yaml, tabulate; assert transformers.__version__ == "5.16.1", transformers.__version__
 PYV
 python -c "import torch, transformers, peft; print(f'[setup] torch {torch.__version__} transformers {transformers.__version__} peft {peft.__version__} cuda {torch.cuda.is_available()}')"
-# /app/data 에 tar 분할본만 있고 풀이 안 풀려 있으면 쓰기 가능한 곳에 풀어서 사용
-if [ ! -d "$DATA_ROOT/pool" ] && ls "$DATA_ROOT"/depthlm_distill_data.tar.part_* >/dev/null 2>&1; then
-  mkdir -p "$OUT_ROOT/data"; cat "$DATA_ROOT"/depthlm_distill_data.tar.part_* | tar -xf - -C "$OUT_ROOT/data" --strip-components=1; export DATA_ROOT=$OUT_ROOT/data; fi
+LOG=$OUT_ROOT/run_${MODE}_${POOL}_${COND}.log; say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
+DATA_REPO=${DATA_REPO:-jh0624/depthlm-distill-data}
+if [ -n "${HF_TOKEN:-}" ]; then python - "$DATA_REPO" <<'PYT' | tee -a "$LOG"
+import sys; from huggingface_hub import HfApi
+api = HfApi(); who = "?"
+try: who = api.whoami()["name"]
+except Exception as e: print(f"!!! [setup] 토큰 무효: {type(e).__name__}"); sys.exit(0)
+for kind, rid in (("model", "facebook/DepthLM"), ("dataset", sys.argv[1])):
+    try: (api.model_info if kind == "model" else api.dataset_info)(rid); print(f"[setup] 토큰({who}) → {rid} 접근 OK")
+    except Exception as e: print(f"!!! [setup] 토큰({who}) → {rid} 접근 실패: {type(e).__name__} (라이선스 동의·비공개 저장소 권한 확인)")
+PYT
+else say "[setup] HF 토큰 없음 — 학생 모델(공개)만 가능. 라벨링·데이터 팩 다운로드는 토큰 필요"; fi
+# 데이터 확보 순서: ① /app/data 에 풀려 있음 → ② 이전 작업이 /app/output/data 에 풀어 둠 → ③ /app/data 의 tar 분할본 → ④ HF 비공개 데이터셋(DATA_REPO)에서 토큰으로 내려받음
+if [ ! -d "$DATA_ROOT/pool" ]; then
+  if [ -d "$OUT_ROOT/data/pool" ]; then export DATA_ROOT=$OUT_ROOT/data
+  else
+    PACK=""; ls "$DATA_ROOT"/depthlm_distill_data.tar.part_* >/dev/null 2>&1 && PACK=$DATA_ROOT
+    if [ -z "$PACK" ] && [ -n "${HF_TOKEN:-}" ]; then
+      echo "[data] $DATA_REPO 에서 데이터 팩 다운로드 (6 GB)"; mkdir -p "$OUT_ROOT/data_pack"
+      python - "$DATA_REPO" "$OUT_ROOT/data_pack" <<'PYD' && PACK=$OUT_ROOT/data_pack || echo "!!! [data] 다운로드 실패 — 토큰이 $DATA_REPO 를 읽을 수 있는지 확인"
+import sys, time; from huggingface_hub import snapshot_download
+repo, out = sys.argv[1:3]
+for a in range(3):
+    try: snapshot_download(repo, repo_type="dataset", local_dir=out, allow_patterns=["depthlm_distill_data.tar.part_*", "SHA256SUMS"]); print("[data] 다운로드 완료"); break
+    except Exception as e:
+        print(f"!!! [data] 시도 {a+1} 실패: {type(e).__name__}: {str(e)[:120]}")
+        if type(e).__name__ in ("RepositoryNotFoundError", "GatedRepoError"): sys.exit(1)   # 권한·이름 문제는 재시도 무의미
+        time.sleep(30)
+else: sys.exit(1)
+PYD
+    fi
+    if [ -n "$PACK" ]; then
+      [ -f "$PACK/SHA256SUMS" ] && { (cd "$PACK" && sha256sum -c --quiet SHA256SUMS) && echo "[data] SHA256 검증 통과" || { echo "!!! [data] SHA256 불일치 — 분할본이 깨짐"; exit 1; }; }
+      mkdir -p "$OUT_ROOT/data"; cat "$PACK"/depthlm_distill_data.tar.part_* | tar -xf - -C "$OUT_ROOT/data" --strip-components=1 && export DATA_ROOT=$OUT_ROOT/data
+      [ "$PACK" = "$OUT_ROOT/data_pack" ] && rm -rf "$OUT_ROOT/data_pack"; echo "[data] 풀기 완료: $(find "$DATA_ROOT/pool" -type f | wc -l) 풀 이미지, $(find "$DATA_ROOT/eval" -type f | wc -l) 평가 파일"
+    fi
+  fi
+fi
 # 모델 가중치가 /app/data/models 에 있으면 그것을 쓰고, 없으면 Hugging Face 에서 내려받음 (인터넷 필요)
 [ -d "$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct" ] && export STUDENT_MODEL=$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct
 [ -d "$DATA_ROOT/models/DepthLM" ] && export TEACHER_MODEL=$DATA_ROOT/models/DepthLM
-LOG=$OUT_ROOT/run_${MODE}_${POOL}_${COND}.log; say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
 say "MODE=$MODE POOL=$POOL COND=$COND FOCAL=$FOCAL DATA_ROOT=$DATA_ROOT OUT_ROOT=$OUT_ROOT"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader | tee -a "$LOG" || say "nvidia-smi 없음"
 GPU_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
-NPROC_TRAIN=${NPROC:-$([ "${GPU_MB:-0}" -gt 100000 ] && echo 8 || echo 1)}; NPROC_LABEL=${NPROC_LABEL:-$([ "${GPU_MB:-0}" -gt 100000 ] && echo 4 || echo 1)}
-say "GPU ${GPU_MB} MiB → 학습 병렬 $NPROC_TRAIN, 라벨링 병렬 $NPROC_LABEL"
+DEVS=($(nvidia-smi -L 2>/dev/null | grep -oE "MIG-[0-9a-f-]+" || true)); NDEV=${#DEVS[@]}   # MIG 슬라이스가 여러 개 보이면 셀을 슬라이스별로 분배
+NPROC_TRAIN=${NPROC:-$([ "${GPU_MB:-0}" -gt 100000 ] && echo 8 || { [ "$NDEV" -gt 1 ] && echo "$NDEV" || echo 1; })}; NPROC_LABEL=${NPROC_LABEL:-$([ "${GPU_MB:-0}" -gt 100000 ] && echo 4 || echo 1)}
+say "GPU ${GPU_MB} MiB, MIG 장치 $NDEV → 학습 병렬 $NPROC_TRAIN, 라벨링 병렬 $NPROC_LABEL"
+if [ "$MODE" = label ] || [ "$MODE" = all ]; then [ "${GPU_MB:-0}" -ge 28000 ] || say "!!! 장치 메모리 ${GPU_MB} MiB < 28 GB — 교사(12B)가 들어가지 않아 라벨링은 실패함. GPU 할당량 7(통째)로 요청할 것"; fi
 python -c "import torch, transformers, peft; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), 'transformers', transformers.__version__, 'peft', peft.__version__)" | tee -a "$LOG"
 if [ "$MODE" = smoke ]; then
   export DATA_ROOT=$PWD/smoke/data
@@ -87,7 +123,7 @@ eval_cell() { local cell=$1; local ad=$OUT_ROOT/checkpoints/${COND}_${cell}${SUF
   for es in $EVAL_SETS; do local suf=""; [ "$es" = large ] && suf=_large; [ -f "$OUT_ROOT/eval/eval_${COND}_${cell}${SUFFIX}${suf}.parquet" ] && continue
     say "평가 $COND $cell ($es)"; python -u experiments/21_eval_student.py --tag "${COND}_${cell}${SUFFIX}" --adapter "$ad" --focal "$FOCAL" --eval_set "$es" ${EVAL_EXTRA:-} > "$OUT_ROOT/eval_${COND}_${cell}${SUFFIX}_${es}.log" 2>&1 || say "!!! 평가 실패 $cell $es"; done; }
 run_cells() { local fn=$1; if [ "$NPROC_TRAIN" -gt 1 ]; then   # GPU 한 장 통째: 셀 NPROC_TRAIN 개를 같은 GPU 에서 동시에 (학습 ≈10 GB, 평가 ≈8 GB)
-    local i=0; for cell in $CELLS; do $fn "$cell" & i=$((i+1)); [ $((i % NPROC_TRAIN)) -eq 0 ] && wait; done; wait
+    local i=0; for cell in $CELLS; do if [ "$NDEV" -gt 1 ]; then CUDA_VISIBLE_DEVICES=${DEVS[$((i % NDEV))]} $fn "$cell" & else $fn "$cell" & fi; i=$((i+1)); [ $((i % NPROC_TRAIN)) -eq 0 ] && wait; done; wait
   else for cell in $CELLS; do $fn "$cell"; done; fi; }
 run_cells train_cell; run_cells eval_cell
 for es in $EVAL_SETS; do python experiments/31_grid.py --cond "$COND" --suffix "$SUFFIX" --eval_set "$es" --arms "$ARMS" >> "$LOG" 2>&1 || say "!!! 표 실패 $es"; done

@@ -69,8 +69,9 @@ for z in zips:
         if m: members[int(m.group(1))] = (zf, n)
         if b == "SHA256SUMS_parts": sums = {l.split()[1].lstrip("*"): l.split()[0] for l in zf.read(n).decode().splitlines() if l.strip()}
 idx = sorted(members); print(f"[data] zip 안 조각 {len(idx)} 개 (part_{idx[0]:02d}..part_{idx[-1]:02d}), 체크섬 {len(sums)} 개", flush=True)
-if idx != list(range(len(idx))): print("!!! [data] 조각 번호가 이어지지 않음"); sys.exit(1)
-tar = subprocess.Popen(["tar", "-xf", "-", "-C", xdir], stdin=subprocess.PIPE); bad = []
+if idx != list(range(16)) or len(sums) < 16: print("!!! [data] zip 안 조각이 16 개가 아니거나 체크섬 파일이 없음 — 업로드가 덜 됐을 수 있음. 다 올라간 뒤 다시 요청할 것"); sys.exit(1)
+tmpx = os.path.join(xdir, f".extracting_{os.getpid()}"); shutil.rmtree(tmpx, ignore_errors=True); os.makedirs(tmpx)
+tar = subprocess.Popen(["tar", "-xf", "-", "-C", tmpx], stdin=subprocess.PIPE); bad = []
 for i in idx:
     zf, n = members[i]; h = hashlib.sha256()
     with zf.open(n) as f:
@@ -82,17 +83,21 @@ for i in idx:
     if sums and sums.get(name) != h.hexdigest(): bad.append(name)
 tar.stdin.close(); rc = tar.wait()
 if bad or rc != 0:
-    print(f"!!! [data] SHA256 불일치 {bad} / tar 종료코드 {rc}"); shutil.rmtree(os.path.join(xdir, "depthlm_distill_h200"), ignore_errors=True); sys.exit(1)
+    print(f"!!! [data] SHA256 불일치 {bad} / tar 종료코드 {rc} — 임시 폴더 정리함"); shutil.rmtree(tmpx, ignore_errors=True); sys.exit(1)
+os.rename(os.path.join(tmpx, "depthlm_distill_h200"), os.path.join(xdir, "depthlm_distill_h200")); shutil.rmtree(tmpx, ignore_errors=True)
 print("[data] zip 조각 SHA256 검증 통과 (흘리면서 검증)")
 PYZ
       fi
     elif [ -d "$PDIR/depthlm_distill_h200/pool" ]; then export DATA_ROOT=$PDIR/depthlm_distill_h200; echo "[data] 이전 작업이 제자리에 풀어 둔 것을 사용: $DATA_ROOT"
     elif [ -n "$PDIR" ]; then
       NP=$(ls "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | wc -l)
-      if touch "$PDIR/.write_test" 2>/dev/null; then rm -f "$PDIR/.write_test"; XDIR=$PDIR; echo "[data] 조각 발견: $PDIR ($NP 개). 폴더가 쓰기 가능 → 제자리에서 풀기 (복사본 없음)"
-      else XDIR=$OUT_ROOT/data; echo "[data] 조각 발견: $PDIR ($NP 개). 폴더가 읽기 전용 → $OUT_ROOT/data 에 풀기 (30 GB)"; fi
-      if [ -f "$PDIR/SHA256SUMS_parts" ]; then (cd "$PDIR" && sha256sum -c --quiet SHA256SUMS_parts) && echo "[data] 조각 SHA256 검증 통과" || { echo "!!! [data] 조각 SHA256 불일치 또는 누락 — 드라이브에서 다시 받을 것"; exit 1; }; fi
-      mkdir -p "$XDIR"; cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$XDIR" && export DATA_ROOT=$XDIR/depthlm_distill_h200 && echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)"
+      [ "$NP" = 16 ] && [ -f "$PDIR/SHA256SUMS_parts" ] || { echo "!!! [data] 조각 $NP/16 개, 체크섬 파일 $([ -f "$PDIR/SHA256SUMS_parts" ] && echo 있음 || echo 없음) — 아직 업로드 중일 수 있음. 다 올라간 뒤 다시 요청할 것"; exit 1; }
+      if touch "$PDIR/.write_test" 2>/dev/null; then rm -f "$PDIR/.write_test"; XDIR=$PDIR; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 쓰기 가능 → 제자리에서 풀기 (복사본 없음)"
+      else XDIR=$OUT_ROOT/data; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 읽기 전용 → $OUT_ROOT/data 에 풀기 (30 GB)"; fi
+      (cd "$PDIR" && sha256sum -c --quiet SHA256SUMS_parts) && echo "[data] 조각 SHA256 검증 통과" || { echo "!!! [data] 조각 SHA256 불일치 — 업로드가 덜 됐거나 깨짐. 다시 받을 것"; exit 1; }
+      TMPX=$XDIR/.extracting_$$; rm -rf "$TMPX"; mkdir -p "$TMPX"   # 임시 폴더에 풀고 성공했을 때만 최종 이름으로 (중간에 죽어도 반쪽짜리 폴더가 남지 않음)
+      if cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$TMPX" && mv "$TMPX/depthlm_distill_h200" "$XDIR/depthlm_distill_h200"; then rm -rf "$TMPX"; export DATA_ROOT=$XDIR/depthlm_distill_h200; echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)"
+      else rm -rf "$TMPX"; echo "!!! [data] 풀기 실패 — 임시 폴더 정리함. 다시 요청할 것"; exit 1; fi
     fi
   fi
 fi

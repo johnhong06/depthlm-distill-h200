@@ -31,7 +31,7 @@ Fill the "container creation and code execution request" issue as follows.
 
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
-| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), verifies and extracts the image packs from `/app/data`, reports which teacher and student weights will be used, downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
+| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), finds the data folder under `/app/data`, reports which teacher and student weights will be used, downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
 | 2 full chain | `bash run.sh all hf_xxx` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
 
 Notes.
@@ -48,23 +48,25 @@ Notes.
 
 ### Data and weights (no secrets)
 
-The service administrator places these under `/app/data/` once (visible to other users of the service, which is
-acceptable for research data and for weights that are distributed with their license); nothing secret is needed
-anywhere, so the repository and the request issues can stay public.
+Everything the jobs need is one archive, `depthlm_distill_h200_app_data.tar` (30 GB), that the service administrator
+extracts once with `tar -xf … -C /app/data`, giving `/app/data/depthlm_distill_h200/`:
 
-| Path under `/app/data/` | Content |
+| Path | Content |
 |---|---|
-| `depthlm_distill_data.tar.part_aa` … `_ad`, `SHA256SUMS` | image pack, 6.0 GB (13,080 training + 757 evaluation images) |
-| `depthlm_distill_data_extra.tar`, `SHA256SUMS_extra` | 205 indoor images added by pool v4, 26 MB |
-| `models/DepthLM/` (+ `MODEL_LICENSE`) | teacher weights, 24 GB, FAIR Noncommercial Research License |
+| `pool/` | 13,285 training images (SUN RGB-D, KITTI, NYUv2), pool v4 |
+| `eval/` | 757 evaluation images and lists (iBims-1, NYUv2, ETH3D) |
+| `models/DepthLM/` + `models/DepthLM_MODEL_LICENSE.txt` | teacher weights (24 GB) with a copy of the FAIR Noncommercial Research License, as its section 1.b.ii requires when the weights are handed to a third party |
+| `extra_done.txt`, `SHA256SUMS_all`, `README_ADMIN.txt` | marker, checksums of every file, note for the administrator |
 
-- The first run extracts the packs once to `/app/output/data/` and later jobs reuse that copy. Ground-truth depth is
-  not shipped as files; the evaluation pixels and their depth values are in `ref/`.
+The archive contains no secret, so the repository and the request issues stay public and nothing has to be revoked
+afterwards. `run.sh` uses that folder read-only (`/app/data` itself is also accepted) and writes only to
+`/app/output`. Ground-truth depth is not shipped as files; the evaluation pixels and their depth values are in `ref/`.
+
 - The student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB) is downloaded from Hugging Face without a token
-  and cached in `/app/output/hf`. A local copy under `/app/data/models/Qwen2.5-VL-3B-Instruct` is used if present.
+  and cached in `/app/output/hf`. A local copy under `models/Qwen2.5-VL-3B-Instruct` is used if present.
 - Fallbacks that need a Hugging Face read token (`hf_…` argument or `/app/data/hf_token.txt`): downloading the image
   packs from the private dataset repo `jh0624/depthlm-distill-data` and the gated teacher from `facebook/DepthLM`.
-  The script prints at start-up whether the token can reach both; an invalid token is dropped. Never commit a token.
+  Never commit a token.
 
 ### Outputs (`/app/output`)
 

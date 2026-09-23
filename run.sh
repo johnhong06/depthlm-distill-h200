@@ -11,7 +11,8 @@ ARGS=(); for a in "$@"; do case $a in hf_*) export HF_TOKEN=$a;; *) ARGS+=("$a")
 MODE=${ARGS[0]:-${MODE:-smoke}}; POOL=${ARGS[1]:-${POOL:-mixed}}; COND=${ARGS[2]:-${COND:-soft}}
 FOCAL=${FOCAL:-750}; EVAL_SETS=${EVAL_SETS:-"small large"}; export HF_HUB_DISABLE_PROGRESS_BARS=1
 # 사업단 파드 규격: 데이터는 /app/data (읽기), 결과는 /app/output (파드 종료 후 보존). 없으면 로컬 기본값.
-export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data ] && echo /app/data || echo $PWD/data)}; export OUT_ROOT=${OUT_ROOT:-$([ -d /app/output ] && echo /app/output || echo $PWD/results)}; mkdir -p "$OUT_ROOT"
+export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data/depthlm_distill_h200 ] && echo /app/data/depthlm_distill_h200 || { [ -d /app/data ] && echo /app/data || echo $PWD/data; })}   # 관리자가 tar 를 푼 폴더 우선
+export OUT_ROOT=${OUT_ROOT:-$([ -d /app/output ] && echo /app/output || echo $PWD/results)}; mkdir -p "$OUT_ROOT"
 DATA_SRC=$DATA_ROOT   # 팩 파일이 놓인 원래 위치 (풀린 뒤 DATA_ROOT 가 바뀌어도 추가 팩은 여기서 찾는다)
 # 토큰: 기본은 이슈 명령 인자(hf_...). 대안으로 /app/data/hf_token.txt 파일도 읽는다
 for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -z "${HF_TOKEN:-}" ] && [ -f "$tf" ] && export HF_TOKEN=$(tr -d '[:space:]' < "$tf") && echo "[setup] HF token loaded from $tf"; done
@@ -71,7 +72,7 @@ if [ ! -d "$DATA_ROOT/pool" ]; then
     fi
   fi
 fi
-if [ -d "$DATA_ROOT/pool" ] && [ ! -f "$DATA_ROOT/.extra_done" ]; then   # 추가 팩 (실내 v4 새 이미지)
+if [ -d "$DATA_ROOT/pool" ] && [ ! -f "$DATA_ROOT/.extra_done" ] && [ ! -f "$DATA_ROOT/extra_done.txt" ]; then   # 추가 팩 (실내 v4 새 이미지). 관리자 묶음에는 이미 포함(extra_done.txt)
   EX=""; for d in /app/data "$DATA_SRC" "$DATA_ROOT"; do [ -f "$d/depthlm_distill_data_extra.tar" ] && EX=$d; done
   if [ -z "$EX" ] && [ -n "${HF_TOKEN:-}" ]; then mkdir -p "$OUT_ROOT/data_pack"; hf_fetch "$OUT_ROOT/data_pack" "depthlm_distill_data_extra.tar" "SHA256SUMS_extra" >/dev/null 2>&1 || true; [ -f "$OUT_ROOT/data_pack/depthlm_distill_data_extra.tar" ] && EX=$OUT_ROOT/data_pack; fi
   if [ -n "$EX" ] && [ -w "$DATA_ROOT" ]; then

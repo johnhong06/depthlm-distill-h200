@@ -42,7 +42,7 @@ PYT
   if [ "$TOKRC" = "3" ]; then unset HF_TOKEN   # 무효한 토큰을 그대로 두면 공개 모델 다운로드까지 401 로 막힌다
     if [ "$MODE" = smoke ]; then say "!!! [setup] 토큰 없이 스모크 계속 (학생 모델은 공개). 새 토큰(만료 없음)으로 다시 요청할 것"
     else say "!!! [setup] 토큰이 무효라 데이터·교사 다운로드가 불가능 → 종료. 새 토큰(만료 없음)으로 다시 요청할 것"; exit 1; fi; fi
-else say "[setup] HF 토큰 없음 — 학생 모델(공개)만 가능. 라벨링·데이터 팩 다운로드는 토큰 필요"; fi
+else say "[setup] HF 토큰 없음 — 학생(공개)은 다운로드 가능. 교사는 로컬 가중치(/app/data 조각)가 있으면 토큰 불필요"; fi
 # 관리자 부담 최소화: 드라이브의 조각(depthlm_distill_h200_app_data.tar.part_*)을 /app/data 아래 아무 폴더에 받아 두기만 하면 스크립트가 검증하고 /app/output/data 에 한 번 푼다
 if [ ! -d "$DATA_ROOT/pool" ]; then
   if [ -d "$OUT_ROOT/data/depthlm_distill_h200/pool" ]; then export DATA_ROOT=$OUT_ROOT/data/depthlm_distill_h200

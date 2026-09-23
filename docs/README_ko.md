@@ -66,4 +66,4 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 
 ## 라이선스
 
-코드 MIT(`LICENSE`), 출처 표기는 `NOTICE`. DepthLM 은 FAIR Noncommercial Research License(교사 라벨 생성에 사용, 비상업 연구 목적). 데이터셋(SUN RGB-D, NYUv2, KITTI, iBims-1, ETH3D)은 각 원 라이선스(비상업 연구)를 따르며 재배포하지 않는다.
+MIT(`LICENSE`)는 이 저장소를 위해 작성한 코드에만 적용된다. 교사 의사 라벨(`pools/*/teacher_labels.parquet`)과 그것으로 학습한 어댑터는 DepthLM 모델의 출력물이라 FAIR Noncommercial Research License(사본 `third_party/DepthLM_Official/MODEL_LICENSE`)에 따라 비상업 연구용으로만 쓸 수 있고 논문에 DepthLM 사용을 밝혀야 한다. 벤더링한 DepthLM 코드(`third_party/`)는 CC BY-NC 4.0. `ref/`와 `smoke/data/`의 픽셀 깊이 값·소수 이미지는 각 데이터셋(iBims-1, NYUv2, ETH3D, SUN RGB-D, KITTI)의 연구용 조건을 따르며 데이터셋 전체는 재배포하지 않는다. 상세는 `NOTICE`.

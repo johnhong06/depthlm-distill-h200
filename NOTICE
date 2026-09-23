@@ -1,6 +1,20 @@
 depthlm-distill-h200
-Copyright (c) 2026 Jihyuck Hong. Code in this repository outside third_party/ is
-released under the MIT License (see LICENSE).
+Copyright (c) 2026 Jihyuck Hong.
+
+The MIT License (see LICENSE) covers ONLY the code written for this repository:
+run.sh, scripts/, experiments/, configs/, depthlm_uncertainty/ (except where a
+file states otherwise). It does NOT cover the files listed below, which are
+provided for noncommercial research use only under the terms of their sources:
+
+  - pools/*/teacher_labels.parquet, and any checkpoint trained from them
+    (outputs / derivative works of the DepthLM model, FAIR Noncommercial
+    Research License, section 1.b.i-ii; a copy of that license is in
+    third_party/DepthLM_Official/MODEL_LICENSE)
+  - ref/*.parquet and smoke/data/ (sparse pixel coordinates, ground-truth depth
+    values and a few images taken from iBims-1, NYU Depth v2, ETH3D, SUN RGB-D
+    and KITTI, under those datasets' research-use terms; KITTI and ETH3D are
+    CC BY-NC-SA)
+  - third_party/ (see item 1)
 
 This repository includes or depends on the following third-party work.
 
@@ -9,9 +23,14 @@ This repository includes or depends on the following third-party work.
      https://github.com/facebookresearch/DepthLM and is licensed under
      CC BY-NC 4.0 (see third_party/DepthLM_Official/LICENSE).
    - The teacher checkpoint facebook/DepthLM (Pixtral-12B based) is distributed
-     under the FAIR Noncommercial Research License. It is used only to produce
-     pseudo-labels for noncommercial research. Any publication that uses this
-     repository must acknowledge DepthLM.
+     under the FAIR Noncommercial Research License (copy in
+     third_party/DepthLM_Official/MODEL_LICENSE). Its outputs and results,
+     including the pseudo-labels and the student adapters trained on them, may
+     be used for noncommercial research only, and any publication using them
+     must acknowledge DepthLM (section 1.b.iii).
+   - depthlm_uncertainty/inference.py and depthlm_data.py follow the message
+     construction of the official eval.py; to the extent code was copied, that
+     code remains under CC BY-NC 4.0.
 
 2. Qwen2.5-VL-3B-Instruct (Alibaba Cloud), Apache License 2.0. Used as the
    student model and downloaded from Hugging Face at run time.

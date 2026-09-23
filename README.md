@@ -102,7 +102,14 @@ DATA_ROOT=/path/to/data bash run.sh grid mixed soft
 
 ## License and attribution
 
-Code outside `third_party/` is MIT (see `LICENSE`). `third_party/DepthLM_Official/utils/` is vendored from
-DepthLM under CC BY-NC 4.0; the DepthLM checkpoint is used under the FAIR Noncommercial Research License and
-only for noncommercial research. Datasets are used under their own noncommercial licenses and are not
-redistributed. See `NOTICE`.
+MIT (`LICENSE`) covers only the code written for this repository. It does not cover the teacher pseudo-labels,
+any checkpoint trained from them, the evaluation reference files or the vendored DepthLM code:
+
+- `pools/*/teacher_labels.parquet` and trained adapters are outputs of the DepthLM model and are usable for
+  noncommercial research only (FAIR Noncommercial Research License, copy in `third_party/DepthLM_Official/MODEL_LICENSE`).
+  Publications must acknowledge DepthLM.
+- `third_party/DepthLM_Official/utils/` is vendored from the DepthLM code repository under CC BY-NC 4.0.
+- `ref/` and `smoke/data/` contain sparse pixel depth values and a few images from iBims-1, NYU Depth v2, ETH3D,
+  SUN RGB-D and KITTI under those datasets' research-use terms. Full datasets are not redistributed.
+
+See `NOTICE` for details.

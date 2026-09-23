@@ -12,6 +12,7 @@ MODE=${ARGS[0]:-${MODE:-smoke}}; POOL=${ARGS[1]:-${POOL:-mixed}}; COND=${ARGS[2]
 FOCAL=${FOCAL:-750}; EVAL_SETS=${EVAL_SETS:-"small large"}; export HF_HUB_DISABLE_PROGRESS_BARS=1
 # 사업단 파드 규격: 데이터는 /app/data (읽기), 결과는 /app/output (파드 종료 후 보존). 없으면 로컬 기본값.
 export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data ] && echo /app/data || echo $PWD/data)}; export OUT_ROOT=${OUT_ROOT:-$([ -d /app/output ] && echo /app/output || echo $PWD/results)}; mkdir -p "$OUT_ROOT"
+DATA_SRC=$DATA_ROOT   # 팩 파일이 놓인 원래 위치 (풀린 뒤 DATA_ROOT 가 바뀌어도 추가 팩은 여기서 찾는다)
 # 토큰: 기본은 이슈 명령 인자(hf_...). 대안으로 /app/data/hf_token.txt 파일도 읽는다
 for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -z "${HF_TOKEN:-}" ] && [ -f "$tf" ] && export HF_TOKEN=$(tr -d '[:space:]' < "$tf") && echo "[setup] HF token loaded from $tf"; done
 # 파드(/app/output 존재)에서는 HF 가중치 캐시를 /app/output/hf 에 두어 다음 작업이 재다운로드하지 않게 한다
@@ -42,23 +43,26 @@ PYT
     else say "!!! [setup] 토큰이 무효라 데이터·교사 다운로드가 불가능 → 종료. 새 토큰(만료 없음)으로 다시 요청할 것"; exit 1; fi; fi
 else say "[setup] HF 토큰 없음 — 학생 모델(공개)만 가능. 라벨링·데이터 팩 다운로드는 토큰 필요"; fi
 # 데이터 확보 순서: ① /app/data 에 풀려 있음 → ② 이전 작업이 /app/output/data 에 풀어 둠 → ③ /app/data 의 tar 분할본 → ④ HF 비공개 데이터셋(DATA_REPO)에서 토큰으로 내려받음
-if [ ! -d "$DATA_ROOT/pool" ]; then
-  if [ -d "$OUT_ROOT/data/pool" ]; then export DATA_ROOT=$OUT_ROOT/data
-  else
-    PACK=""; ls "$DATA_ROOT"/depthlm_distill_data.tar.part_* >/dev/null 2>&1 && PACK=$DATA_ROOT
-    if [ -z "$PACK" ] && [ -n "${HF_TOKEN:-}" ]; then
-      echo "[data] $DATA_REPO 에서 데이터 팩 다운로드 (6 GB)"; mkdir -p "$OUT_ROOT/data_pack"
-      python - "$DATA_REPO" "$OUT_ROOT/data_pack" <<'PYD' && PACK=$OUT_ROOT/data_pack || echo "!!! [data] 다운로드 실패 — 토큰이 $DATA_REPO 를 읽을 수 있는지 확인"
+# 추가 팩(depthlm_distill_data_extra.tar = 실내 풀 v4 의 새 이미지 205 장)은 본 팩 위에 한 번만 덧씌운다 (.extra_done 표시)
+hf_fetch() { local out=$1; shift; python - "$DATA_REPO" "$out" "$@" <<'PYD'
 import sys, time; from huggingface_hub import snapshot_download
-repo, out = sys.argv[1:3]
+repo, out, pats = sys.argv[1], sys.argv[2], sys.argv[3:]
 for a in range(3):
-    try: snapshot_download(repo, repo_type="dataset", local_dir=out, allow_patterns=["depthlm_distill_data.tar.part_*", "SHA256SUMS"]); print("[data] 다운로드 완료"); break
+    try: snapshot_download(repo, repo_type="dataset", local_dir=out, allow_patterns=pats); print(f"[data] 다운로드 완료: {pats}"); break
     except Exception as e:
         print(f"!!! [data] 시도 {a+1} 실패: {type(e).__name__}: {str(e)[:120]}")
         if type(e).__name__ in ("RepositoryNotFoundError", "GatedRepoError"): sys.exit(1)   # 권한·이름 문제는 재시도 무의미
         time.sleep(30)
 else: sys.exit(1)
 PYD
+}
+if [ ! -d "$DATA_ROOT/pool" ]; then
+  if [ -d "$OUT_ROOT/data/pool" ]; then export DATA_ROOT=$OUT_ROOT/data
+  else
+    PACK=""; ls "$DATA_ROOT"/depthlm_distill_data.tar.part_* >/dev/null 2>&1 && PACK=$DATA_ROOT
+    if [ -z "$PACK" ] && [ -n "${HF_TOKEN:-}" ]; then
+      echo "[data] $DATA_REPO 에서 데이터 팩 다운로드 (6 GB)"; mkdir -p "$OUT_ROOT/data_pack"
+      hf_fetch "$OUT_ROOT/data_pack" "depthlm_distill_data.tar.part_*" "SHA256SUMS" && PACK=$OUT_ROOT/data_pack || echo "!!! [data] 다운로드 실패 — 토큰이 $DATA_REPO 를 읽을 수 있는지 확인"
     fi
     if [ -n "$PACK" ]; then
       [ -f "$PACK/SHA256SUMS" ] && { (cd "$PACK" && sha256sum -c --quiet SHA256SUMS) && echo "[data] SHA256 검증 통과" || { echo "!!! [data] SHA256 불일치 — 분할본이 깨짐"; exit 1; }; }
@@ -66,6 +70,15 @@ PYD
       [ "$PACK" = "$OUT_ROOT/data_pack" ] && rm -rf "$OUT_ROOT/data_pack"; echo "[data] 풀기 완료: $(find "$DATA_ROOT/pool" -type f | wc -l) 풀 이미지, $(find "$DATA_ROOT/eval" -type f | wc -l) 평가 파일"
     fi
   fi
+fi
+if [ -d "$DATA_ROOT/pool" ] && [ ! -f "$DATA_ROOT/.extra_done" ]; then   # 추가 팩 (실내 v4 새 이미지)
+  EX=""; for d in /app/data "$DATA_SRC" "$DATA_ROOT"; do [ -f "$d/depthlm_distill_data_extra.tar" ] && EX=$d; done
+  if [ -z "$EX" ] && [ -n "${HF_TOKEN:-}" ]; then mkdir -p "$OUT_ROOT/data_pack"; hf_fetch "$OUT_ROOT/data_pack" "depthlm_distill_data_extra.tar" "SHA256SUMS_extra" >/dev/null 2>&1 || true; [ -f "$OUT_ROOT/data_pack/depthlm_distill_data_extra.tar" ] && EX=$OUT_ROOT/data_pack; fi
+  if [ -n "$EX" ] && [ -w "$DATA_ROOT" ]; then
+    [ -f "$EX/SHA256SUMS_extra" ] && { (cd "$EX" && sha256sum -c --quiet SHA256SUMS_extra) || { echo "!!! [data] 추가 팩 SHA256 불일치"; exit 1; }; }
+    tar -xf "$EX/depthlm_distill_data_extra.tar" -C "$DATA_ROOT" --strip-components=1 && touch "$DATA_ROOT/.extra_done" && echo "[data] 추가 팩 풀기 완료 ($(tar -tf "$EX/depthlm_distill_data_extra.tar" | grep -cE '\.(png|jpg)$') 장)"
+    [ "$EX" = "$OUT_ROOT/data_pack" ] && rm -rf "$OUT_ROOT/data_pack"
+  else echo "!!! [data] 추가 팩(depthlm_distill_data_extra.tar) 없음 — 실내 풀 v4 의 새 이미지 205 장이 없어 실내 라벨링·격자는 실패함 (HF 데이터셋에 올렸는지 확인)"; fi
 fi
 # 모델 가중치가 /app/data/models 에 있으면 그것을 쓰고, 없으면 Hugging Face 에서 내려받음 (인터넷 필요)
 [ -d "$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct" ] && export STUDENT_MODEL=$DATA_ROOT/models/Qwen2.5-VL-3B-Instruct
@@ -86,11 +99,10 @@ if [ "$MODE" = smoke ]; then
   python -u experiments/21_eval_student.py --tag smoke --adapter "$OUT_ROOT/checkpoints/soft_smoke" --focal "$FOCAL" --eval_set small --limit_img 1 --per_max 1 2>&1 | grep -vE "^\[transformers\]" | tee -a "$LOG"
   say "[smoke] 완료. 결과: $OUT_ROOT/eval/eval_smoke.parquet, 어댑터: $OUT_ROOT/checkpoints/soft_smoke"; exit 0
 fi
-if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위 실행이라 하나가 실패해도 다음으로 넘어간다
+if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위 실행이라 하나가 실패해도 다음으로 넘어간다. 라벨링은 빠진 쌍만 한다
+  say "[all] 라벨링 mixed (풀 v4 교체분 1,160 px)"; bash run.sh label mixed || say "!!! [all] 라벨링 실패 mixed"
   for c in soft hard; do say "[all] 격자 mixed $c"; bash run.sh grid mixed $c || say "!!! [all] 격자 실패 mixed $c"; done
-  for p in indoor outdoor; do
-    if [ -f pools/$p/teacher_labels.parquet ] || [ -f "$OUT_ROOT/labels/$p/teacher_labels.parquet" ]; then say "[all] $p 라벨 있음 — 라벨링 건너뜀"
-    else [ -n "${HF_TOKEN:-}" ] || say "!!! [all] HF_TOKEN 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; fi; done
+  for p in indoor outdoor; do [ -n "${HF_TOKEN:-}" ] || say "!!! [all] HF_TOKEN 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; done
   # 라벨링이 둘 다 끝났으면 토큰 사본을 지운다 (이후 격자는 토큰 불필요). /app/data 가 읽기 전용이면 관리자에게 삭제 요청. 실제 무효화는 HF 계정에서 Revoke 해야 한다
   if [ -f "$OUT_ROOT/labels/indoor/teacher_labels.parquet" ] && [ -f "$OUT_ROOT/labels/outdoor/teacher_labels.parquet" ]; then
     for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -f "$tf" ] && { rm -f "$tf" 2>/dev/null && say "[all] 토큰 파일 삭제됨: $tf" || say "!!! [all] 토큰 파일을 지우지 못함(읽기 전용): $tf — 관리자에게 삭제 요청"; }; done
@@ -99,31 +111,50 @@ if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위
   for p in indoor outdoor; do for c in soft hard; do say "[all] 격자 $p $c"; bash run.sh grid $p $c || say "!!! [all] 격자 실패 $p $c"; done; done
   say "[all] 완료. 결과 zip: $(ls "$OUT_ROOT"/results_*.zip 2>/dev/null | tr '\n' ' ')"; exit 0
 fi
-if [ "$MODE" = label ]; then   # 교사 라벨링: VRAM 28-30 GB → MIG 7 작업. 결과 라벨은 $OUT_ROOT/labels/<POOL>/teacher_labels.parquet (재개 가능)
-  [ -d "$DATA_ROOT/pool" ] || { say "!!! DATA_ROOT 에 pool/ 없음"; exit 1; }; mkdir -p "$OUT_ROOT/labels/$POOL"
-  say "[label] 풀 $POOL: $(python -c "import pandas as pd;print(len(pd.read_parquet('pools/$POOL/todo_label.parquet')))") px, 병렬 $NPROC_LABEL"
-  python - "$POOL" "$NPROC_LABEL" "$OUT_ROOT" <<'PYS'
-import sys, os, pandas as pd; pool, n, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-t = pd.read_parquet(f"pools/{pool}/todo_label.parquet"); os.makedirs(f"{out}/labels/{pool}", exist_ok=True)
-for i in range(n): t.iloc[i::n].to_parquet(f"{out}/labels/{pool}/todo_{i}.parquet", index=False)
+if [ "$MODE" = label ]; then   # 교사 라벨링: 저장소 라벨 + 이전 part 를 base 로 두고 todo 중 빠진 쌍만 라벨링 → teacher_labels.parquet (완전본). VRAM 28-30 GB
+  [ -d "$DATA_ROOT/pool" ] || { say "!!! DATA_ROOT 에 pool/ 없음"; exit 1; }; LD=$OUT_ROOT/labels/$POOL; mkdir -p "$LD"
+  python - "$POOL" "$NPROC_LABEL" "$LD" <<'PYS' | tee -a "$LOG"
+import sys, os, glob, pandas as pd; pool, n, ld = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+todo = pd.read_parquet(f"pools/{pool}/todo_label.parquet")[["image_id", "pixel_index"]].drop_duplicates()
+srcs = [p for p in [f"pools/{pool}/teacher_labels.parquet"] + sorted(glob.glob(f"{ld}/part_*.parquet")) if os.path.exists(p)]
+have = pd.concat([pd.read_parquet(p) for p in srcs], ignore_index=True).drop_duplicates(["image_id", "pixel_index"]) if srcs else pd.DataFrame(columns=list(todo.columns))
+have = have.merge(todo, on=["image_id", "pixel_index"]); have.to_parquet(f"{ld}/base.parquet", index=False)
+m = todo.merge(have[["image_id", "pixel_index"]], on=["image_id", "pixel_index"], how="left", indicator=True); miss = m[m._merge == "left_only"][["image_id", "pixel_index"]]
+for f in glob.glob(f"{ld}/todo_*.parquet"): os.remove(f)
+k = min(n, max(1, (len(miss) + 63) // 64)) if len(miss) else 0   # 조각당 최소 64 px
+for i in range(k): miss.iloc[i::k].to_parquet(f"{ld}/todo_{i}.parquet", index=False)
+open(f"{ld}/n_shards.txt", "w").write(str(k)); print(f"[label] {pool}: 필요 {len(todo)} px, 보유 {len(have)} px, 라벨링 {len(miss)} px → 조각 {k}")
 PYS
-  for i in $(seq 0 $((NPROC_LABEL-1))); do
-    ( for a in 1 2 3; do python -u experiments/11_label_teacher.py --pool pools/$POOL/pool.jsonl --image_folder "$DATA_ROOT" --todo "$OUT_ROOT/labels/$POOL/todo_$i.parquet" --out "$OUT_ROOT/labels/$POOL/part_$i.parquet" --chunk 8 > "$OUT_ROOT/labels/$POOL/label_$i.log" 2>&1 && break; sleep 30; done ) &
-  done; wait
-  python - "$POOL" "$OUT_ROOT" <<'PYS'
-import sys, glob, pandas as pd; pool, out = sys.argv[1], sys.argv[2]
-d = pd.concat([pd.read_parquet(p) for p in sorted(glob.glob(f"{out}/labels/{pool}/part_*.parquet"))], ignore_index=True).drop_duplicates(["image_id", "pixel_index"])
-d.to_parquet(f"{out}/labels/{pool}/teacher_labels.parquet", index=False); print(f"[label] 병합 {len(d)} px, 파싱 실패 {d.teacher_greedy1.isna().mean()*100:.2f}%, 질량 중앙 {d.teacher_mass.median():.3f}")
+  K=$(cat "$LD/n_shards.txt")
+  if [ "$K" -gt 0 ]; then
+    for i in $(seq 0 $((K-1))); do
+      ( for a in 1 2 3; do python -u experiments/11_label_teacher.py --pool pools/$POOL/pool.jsonl --image_folder "$DATA_ROOT" --todo "$LD/todo_$i.parquet" --out "$LD/part_$i.parquet" --chunk 8 > "$LD/label_$i.log" 2>&1 && break; sleep 30; done ) &
+    done; wait
+  fi
+  MRC=0; python - "$POOL" "$LD" > "$LD/merge.txt" 2>&1 <<'PYS' || MRC=$?
+import sys, glob, pandas as pd; pool, ld = sys.argv[1], sys.argv[2]
+todo = pd.read_parquet(f"pools/{pool}/todo_label.parquet")[["image_id", "pixel_index"]].drop_duplicates()
+d = pd.concat([pd.read_parquet(p) for p in [f"{ld}/base.parquet"] + sorted(glob.glob(f"{ld}/part_*.parquet"))], ignore_index=True).drop_duplicates(["image_id", "pixel_index"])
+d = d.merge(todo, on=["image_id", "pixel_index"]); d.to_parquet(f"{ld}/teacher_labels.parquet", index=False); miss = len(todo) - len(d)
+print(f"[label] {pool} 병합 {len(d)} px / 필요 {len(todo)} px (부족 {miss}), 파싱 실패 {d.teacher_greedy1.isna().mean()*100:.2f}%, 질량 중앙 {d.teacher_mass.median():.3f}"); sys.exit(1 if miss else 0)
 PYS
-  say "[label] 완료: $OUT_ROOT/labels/$POOL/teacher_labels.parquet"; exit 0
+  cat "$LD/merge.txt" | tee -a "$LOG"; [ "$MRC" = 0 ] || { say "!!! [label] $POOL 라벨 부족 — 같은 명령을 다시 내면 이어서 라벨링"; exit 1; }
+  say "[label] 완료: $LD/teacher_labels.parquet"; exit 0
 fi
 # --- grid ---  태그 = <cond>_<cell>_<pool>_f<focal>  (풀이 달라도 체크포인트·평가 파일이 겹치지 않음)
 SUFFIX=_${POOL}_f${FOCAL}; ARMS=pools/$POOL/arms.json; PCFG=configs/pool_${POOL}.yaml
-LABELS=pools/$POOL/teacher_labels.parquet; [ -f "$LABELS" ] || LABELS=$OUT_ROOT/labels/$POOL/teacher_labels.parquet   # 저장소에 없으면 파드에서 만든 라벨
+LABELS=$OUT_ROOT/labels/$POOL/teacher_labels.parquet; [ -f "$LABELS" ] || LABELS=pools/$POOL/teacher_labels.parquet   # 파드에서 병합한 완전본 우선, 없으면 저장소 라벨
 [ -f "$ARMS" ] && [ -f "$LABELS" ] && [ -f "$PCFG" ] || { say "!!! 풀 파일 없음: $ARMS $LABELS $PCFG"; exit 1; }
 [ -d "$DATA_ROOT/pool" ] && [ -d "$DATA_ROOT/eval" ] || { say "!!! DATA_ROOT 에 pool/ eval/ 없음 → scripts/fetch_data.sh 먼저"; exit 1; }
 CELLS=${CELLS:-$(python -c "import json;print(' '.join(c['tag'] for c in json.load(open('$ARMS'))['cells']))")}
 say "[grid] 풀 $POOL 조건 $COND 라벨 $LABELS 셀: $CELLS"
+CRC=0; python - "$LABELS" "$POOL" > "$OUT_ROOT/coverage_${POOL}.txt" 2>&1 <<'PYC' || CRC=$?
+import sys, glob, pandas as pd; lab, pool = sys.argv[1:3]
+L = pd.read_parquet(lab)[["image_id", "pixel_index"]].drop_duplicates(); need = pd.concat([pd.read_parquet(p) for p in glob.glob(f"pools/{pool}/rows_*.parquet")]).drop_duplicates()
+m = need.merge(L, on=["image_id", "pixel_index"], how="left", indicator=True); miss = int((m._merge == "left_only").sum())
+print(f"[grid] 라벨 커버리지: 필요 {len(need)} px, 부족 {miss} px"); sys.exit(1 if miss else 0)
+PYC
+cat "$OUT_ROOT/coverage_${POOL}.txt" | tee -a "$LOG"; rm -f "$OUT_ROOT/coverage_${POOL}.txt"; [ "$CRC" = 0 ] || { say "!!! [grid] 라벨 부족 → bash run.sh label $POOL 먼저 (all 모드는 자동)"; exit 1; }
 train_cell() { local cell=$1; local ad=$OUT_ROOT/checkpoints/${COND}_${cell}${SUFFIX}
   [ -f "$ad/adapter_model.safetensors" ] && { say "$cell 학습 완료됨 — 건너뜀"; return 0; }
   say "학습 $COND $cell"; python -u experiments/20_train_student.py --cond "$COND" --epochs 2 --accum 8 --focal "$FOCAL" --labels "$LABELS" --pools "$PCFG" --rows "pools/$POOL/rows_$cell.parquet" --tag "_${cell}${SUFFIX}" > "$OUT_ROOT/train_${COND}_${cell}${SUFFIX}.log" 2>&1 || say "!!! 학습 실패 $cell"; }

@@ -73,6 +73,8 @@
  },
  "seed": 0,
  "n_images": 6400,
- "n_scenes": 5867,
- "n_label_px": 44800
+ "n_scenes": 5674,
+ "n_label_px": 44800,
+ "excluded_eval_scenes": "nyuv2 eval 200 scenes",
+ "version": "v4"
 }

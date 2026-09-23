@@ -31,13 +31,14 @@ Fill the "container creation and code execution request" issue as follows.
 
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
-| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), checks the token against DepthLM and the data repo, downloads and verifies the data pack, downloads the student, trains 30 steps on the bundled 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
+| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), checks the token against DepthLM and the data repo, downloads and verifies the data pack and the extra pack, downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
 | 2 full chain | `bash run.sh all hf_xxx` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
 
 Notes.
 
 - `all` runs each stage as a child process; a failed stage does not stop the next one. Re-submitting the same
-  command resumes: finished cells, evaluations and label shards are skipped.
+  command resumes: finished cells, evaluations and label shards are skipped. Labeling only produces the pixels that
+  are missing from the repository labels, and a grid refuses to start if any of its pixels lack a label.
 - On a whole GPU the script trains 8 cells and evaluates 8 cells concurrently and labels with 4 teacher
   processes (≈30 GB each). On an 18 GB slice everything runs sequentially. Override with `NPROC`, `NPROC_LABEL`.
 - Stages can also be submitted one at a time: `bash run.sh grid <mixed|indoor|outdoor> <soft|hard>` and
@@ -47,8 +48,9 @@ Notes.
 
 ### Data and token
 
-- The image data is one tar archive split into four parts (6.0 GB) plus `SHA256SUMS`, stored in the **private**
-  Hugging Face dataset repo `jh0624/depthlm-distill-data`. On the first run the script downloads it with the token,
+- The image data is one tar archive split into four parts (6.0 GB) plus `SHA256SUMS`, and a small extra archive
+  `depthlm_distill_data_extra.tar` (205 indoor images added by pool v4) plus `SHA256SUMS_extra`, stored in the
+  **private** Hugging Face dataset repo `jh0624/depthlm-distill-data`. On the first run the script downloads it with the token,
   verifies the checksums, extracts it to `/app/output/data/` and deletes the download. Later jobs reuse the extracted
   copy. Alternatively the administrator can place the same files directly under `/app/data/`, which is used first.
   Layout after extraction: `pool/{sunrgbd,kitti,distill_pool}/…` (13,080 training images) and
@@ -81,9 +83,14 @@ Ask the administrator for the six zip files and the two label files when the cha
 
 | Pool | Images / scenes | Domain | Labels |
 |---|---|---|---|
-| `mixed` | 6,400 / 3,697 | indoor 50 %, driving 50 % (matches DepthLM's per-dataset sampling) | included, 44,800 px |
-| `indoor` | 6,400 / 5,867 | SUN RGB-D, NYUv2 | produced on the service |
+| `mixed` | 6,400 / 3,684 | indoor 50 %, driving 50 % (matches DepthLM's per-dataset sampling) | 43,640 px included; 1,160 px (146 images replaced in v4) produced on the service |
+| `indoor` | 6,400 / 5,674 | SUN RGB-D, NYUv2 | produced on the service |
 | `outdoor` | 6,400 / 509 | KITTI (scene count saturates at 509; upper N cells add frames of the same drives, reported as a limitation) | produced on the service |
+
+Pool v4 (2026-09-23): NYUv2 has ~3 images per room, so the 200 NYUv2 evaluation images' 195 rooms are excluded
+from the pools at the scene level (146 mixed-pool and 333 indoor-pool images replaced in place by the next unused
+indoor candidates of the same deterministic order; see `pools/*/pool_v4_report.md`). No evaluation image or scene of
+NYUv2, iBims-1 or ETH3D is in any pool.
 
 Grid cells: `N400_k1 N400_k4 N400_k16 N1600_k1 N1600_k4 N1600_k16 N6400_k1 N6400_k4`, nested (image order fixed,
 pixel indices 0..k−1 shared). Student: Qwen2.5-VL-3B-Instruct + LoRA r16 α32 on q/k/v/o, AdamW 1e-4 cosine,
@@ -111,7 +118,7 @@ any checkpoint trained from them, the evaluation reference files or the vendored
   noncommercial research only (FAIR Noncommercial Research License, copy in `third_party/DepthLM_Official/MODEL_LICENSE`).
   Publications must acknowledge DepthLM.
 - `third_party/DepthLM_Official/utils/` is vendored from the DepthLM code repository under CC BY-NC 4.0.
-- `ref/` and `smoke/data/` contain sparse pixel depth values and a few images from iBims-1, NYU Depth v2, ETH3D,
-  SUN RGB-D and KITTI under those datasets' research-use terms. Full datasets are not redistributed.
+- `ref/` contains sparse pixel coordinates and depth values from iBims-1, NYU Depth v2 and ETH3D under those datasets'
+  research-use terms. `smoke/data/` images are synthetic. Full datasets are not redistributed.
 
 See `NOTICE` for details.

@@ -10,10 +10,9 @@ provided for noncommercial research use only under the terms of their sources:
     (outputs / derivative works of the DepthLM model, FAIR Noncommercial
     Research License, section 1.b.i-ii; a copy of that license is in
     third_party/DepthLM_Official/MODEL_LICENSE)
-  - ref/*.parquet and smoke/data/ (sparse pixel coordinates, ground-truth depth
-    values and a few images taken from iBims-1, NYU Depth v2, ETH3D, SUN RGB-D
-    and KITTI, under those datasets' research-use terms; KITTI and ETH3D are
-    CC BY-NC-SA)
+  - ref/*.parquet (sparse pixel coordinates and ground-truth depth values from
+    iBims-1, NYU Depth v2 and ETH3D, under those datasets' research-use terms;
+    ETH3D is CC BY-NC-SA). smoke/data/ images are synthetic.
   - third_party/ (see item 1)
 
 This repository includes or depends on the following third-party work.

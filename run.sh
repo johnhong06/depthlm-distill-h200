@@ -43,6 +43,18 @@ PYT
     if [ "$MODE" = smoke ]; then say "!!! [setup] 토큰 없이 스모크 계속 (학생 모델은 공개). 새 토큰(만료 없음)으로 다시 요청할 것"
     else say "!!! [setup] 토큰이 무효라 데이터·교사 다운로드가 불가능 → 종료. 새 토큰(만료 없음)으로 다시 요청할 것"; exit 1; fi; fi
 else say "[setup] HF 토큰 없음 — 학생 모델(공개)만 가능. 라벨링·데이터 팩 다운로드는 토큰 필요"; fi
+# 관리자 부담 최소화: 드라이브의 조각(depthlm_distill_h200_app_data.tar.part_*)을 /app/data 아래 아무 폴더에 받아 두기만 하면 스크립트가 검증하고 /app/output/data 에 한 번 푼다
+if [ ! -d "$DATA_ROOT/pool" ]; then
+  if [ -d "$OUT_ROOT/data/depthlm_distill_h200/pool" ]; then export DATA_ROOT=$OUT_ROOT/data/depthlm_distill_h200
+  else
+    PDIR=""; for d in /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PDIR" ] && PDIR=$(find "$d" -maxdepth 3 -name "depthlm_distill_h200_app_data.tar.part_00" -printf "%h\n" 2>/dev/null | head -1 || true); done   # set -e/pipefail 안전
+    if [ -n "$PDIR" ]; then
+      NP=$(ls "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | wc -l); echo "[data] 조각 발견: $PDIR ($NP 개) → $OUT_ROOT/data 에 풀기 (30 GB, 수 분)"
+      if [ -f "$PDIR/SHA256SUMS_parts" ]; then (cd "$PDIR" && sha256sum -c --quiet SHA256SUMS_parts) && echo "[data] 조각 SHA256 검증 통과" || { echo "!!! [data] 조각 SHA256 불일치 또는 누락 — 드라이브에서 다시 받을 것"; exit 1; }; fi
+      mkdir -p "$OUT_ROOT/data"; cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$OUT_ROOT/data" && export DATA_ROOT=$OUT_ROOT/data/depthlm_distill_h200 && echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)"
+    fi
+  fi
+fi
 # 데이터 확보 순서: ① /app/data 에 풀려 있음 → ② 이전 작업이 /app/output/data 에 풀어 둠 → ③ /app/data 의 tar 분할본 → ④ HF 비공개 데이터셋(DATA_REPO)에서 토큰으로 내려받음
 # 추가 팩(depthlm_distill_data_extra.tar = 실내 풀 v4 의 새 이미지 205 장)은 본 팩 위에 한 번만 덧씌운다 (.extra_done 표시)
 hf_fetch() { local out=$1; shift; python - "$DATA_REPO" "$out" "$@" <<'PYD'

@@ -31,7 +31,7 @@ Fill the "container creation and code execution request" issue as follows.
 
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
-| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), finds the data folder under `/app/data`, reports which teacher and student weights will be used, downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
+| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), finds the archive parts under `/app/data`, verifies and extracts them once (30 GB, a few minutes), reports which teacher and student weights will be used, downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
 | 2 full chain | `bash run.sh all hf_xxx` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
 
 Notes.
@@ -48,10 +48,14 @@ Notes.
 
 ### Data and weights (no secrets)
 
-Everything the jobs need is one archive, `depthlm_distill_h200_app_data.tar` (30 GB), that the service administrator
-extracts once with `tar -xf … -C /app/data`, giving `/app/data/depthlm_distill_h200/`:
+Everything the jobs need is one 30 GB tar, split into sixteen 2 GB parts (`depthlm_distill_h200_app_data.tar.part_00`
+… `part_15`, plus `SHA256SUMS_parts` and a note), shared with the service administrator through a Google Drive
+folder. The administrator only downloads the files into any folder under `/app/data/` (for example
+`/app/data/h200_share/`); nothing has to be extracted by hand. On the first run `run.sh` finds the parts, verifies
+their checksums, extracts them once to `/app/output/data/depthlm_distill_h200/` and later jobs reuse that copy.
+An already extracted `/app/data/depthlm_distill_h200/` or `/app/data/{pool,eval}` is used directly if present.
 
-| Path | Content |
+| Path inside the archive | Content |
 |---|---|
 | `pool/` | 13,285 training images (SUN RGB-D, KITTI, NYUv2), pool v4 |
 | `eval/` | 757 evaluation images and lists (iBims-1, NYUv2, ETH3D) |
@@ -59,8 +63,8 @@ extracts once with `tar -xf … -C /app/data`, giving `/app/data/depthlm_distill
 | `extra_done.txt`, `SHA256SUMS_all`, `README_ADMIN.txt` | marker, checksums of every file, note for the administrator |
 
 The archive contains no secret, so the repository and the request issues stay public and nothing has to be revoked
-afterwards. `run.sh` uses that folder read-only (`/app/data` itself is also accepted) and writes only to
-`/app/output`. Ground-truth depth is not shipped as files; the evaluation pixels and their depth values are in `ref/`.
+afterwards. `run.sh` reads `/app/data` only and writes to `/app/output`. Ground-truth depth is not shipped as
+files; the evaluation pixels and their depth values are in `ref/`.
 
 - The student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB) is downloaded from Hugging Face without a token
   and cached in `/app/output/hf`. A local copy under `models/Qwen2.5-VL-3B-Instruct` is used if present.

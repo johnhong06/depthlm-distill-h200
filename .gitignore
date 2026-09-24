@@ -1,7 +1,8 @@
 results/
 __pycache__/
 *.pyc
-data/
+/data/
 *.tar.part_*
 hf_token.txt
 *.token
+!smoke/data/

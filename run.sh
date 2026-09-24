@@ -5,6 +5,11 @@
 # 환경변수: DATA_ROOT(데이터 루트, 기본 ./data), OUT_ROOT(결과, 기본 ./results), FOCAL(750), CELLS(기본 arms.json 전체), EVAL_SETS("small large"),
 #           HF_TOKEN(gated 모델용), NPROC(병렬 학습 프로세스 수, MIG 슬라이스 격리 시 CUDA_VISIBLE_DEVICES 로 분배)
 set -euo pipefail; cd "$(dirname "$0")"; export PYTHONUNBUFFERED=1
+EXTRACTED_HERE=0   # 이 작업이 $OUT_ROOT/data 에 데이터를 풀었으면 1 → 끝날 때 지워서 결과만 남긴다 (관리자 서버에 30 GB 가 작업마다 쌓이지 않게)
+cleanup() { if [ "${H200_CHILD:-0}" = 0 ] && [ "${KEEP_DATA:-0}" = 0 ]; then
+    [ "$EXTRACTED_HERE" = 1 ] && rm -rf "$OUT_ROOT/data" && echo "[cleanup] 작업용 데이터 복사본 삭제 ($OUT_ROOT/data)"
+    [ -d /app/output ] && [ -d "$OUT_ROOT/hf" ] && rm -rf "$OUT_ROOT/hf" && echo "[cleanup] 모델 캐시 삭제 ($OUT_ROOT/hf) — 결과(체크포인트·평가·표·zip·라벨)만 남음"; fi; return 0; }
+trap cleanup EXIT
 # 위치 인자: bash run.sh <smoke|label|grid|all> [pool] [cond] [hf_token]   (환경변수 MODE/POOL/COND/HF_TOKEN 도 동일하게 동작; 토큰은 /app/data/hf_token.txt 로도 가능)
 # all = 혼합 격자 2개 → 실내·실외 라벨링(라벨이 없을 때만) → 실내·실외 격자 4개를 한 작업으로 이어서 실행
 ARGS=(); for a in "$@"; do case $a in hf_*) export HF_TOKEN=$a;; *) ARGS+=("$a");; esac; done   # hf_ 로 시작하는 인자는 위치와 무관하게 토큰
@@ -59,7 +64,7 @@ PYL
 )
       if [ -n "$ZIPS" ]; then
         ZD=$(dirname "$(echo $ZIPS | cut -d' ' -f1)"); if touch "$ZD/.write_test" 2>/dev/null; then rm -f "$ZD/.write_test"; XDIR=$ZD; echo "[data] zip 발견: $ZIPS → 폴더가 쓰기 가능, 제자리에서 풀기"; else XDIR=$OUT_ROOT/data; echo "[data] zip 발견: $ZIPS → 읽기 전용, $OUT_ROOT/data 에 풀기 (30 GB)"; fi
-        mkdir -p "$XDIR"; python - "$XDIR" $ZIPS <<'PYZ' && export DATA_ROOT=$XDIR/depthlm_distill_h200 && echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)" || { echo "!!! [data] zip 에서 풀기 실패 (조각 누락 또는 SHA256 불일치)"; exit 1; }
+        mkdir -p "$XDIR"; python - "$XDIR" $ZIPS <<'PYZ' && export DATA_ROOT=$XDIR/depthlm_distill_h200 && { [ "$XDIR" = "$OUT_ROOT/data" ] && EXTRACTED_HERE=1 || true; } && echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)" || { echo "!!! [data] zip 에서 풀기 실패 (조각 누락 또는 SHA256 불일치)"; exit 1; }
 import sys, zipfile, hashlib, subprocess, os, re, shutil
 xdir, zips = sys.argv[1], sys.argv[2:]; members = {}; sums = {}
 for z in zips:
@@ -96,7 +101,7 @@ PYZ
       else XDIR=$OUT_ROOT/data; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 읽기 전용 → $OUT_ROOT/data 에 풀기 (30 GB)"; fi
       (cd "$PDIR" && sha256sum -c --quiet SHA256SUMS_parts) && echo "[data] 조각 SHA256 검증 통과" || { echo "!!! [data] 조각 SHA256 불일치 — 업로드가 덜 됐거나 깨짐. 다시 받을 것"; exit 1; }
       TMPX=$XDIR/.extracting_$$; rm -rf "$TMPX"; mkdir -p "$TMPX"   # 임시 폴더에 풀고 성공했을 때만 최종 이름으로 (중간에 죽어도 반쪽짜리 폴더가 남지 않음)
-      if cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$TMPX" && mv "$TMPX/depthlm_distill_h200" "$XDIR/depthlm_distill_h200"; then rm -rf "$TMPX"; export DATA_ROOT=$XDIR/depthlm_distill_h200; echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)"
+      if cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$TMPX" && mv "$TMPX/depthlm_distill_h200" "$XDIR/depthlm_distill_h200"; then rm -rf "$TMPX"; export DATA_ROOT=$XDIR/depthlm_distill_h200; [ "$XDIR" = "$OUT_ROOT/data" ] && EXTRACTED_HERE=1; echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)"
       else rm -rf "$TMPX"; echo "!!! [data] 풀기 실패 — 임시 폴더 정리함. 다시 요청할 것"; exit 1; fi
     fi
   fi
@@ -163,15 +168,15 @@ if [ "$MODE" = smoke ]; then
   say "[smoke] 완료. 결과: $OUT_ROOT/eval/eval_smoke.parquet, 어댑터: $OUT_ROOT/checkpoints/soft_smoke"; exit 0
 fi
 if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위 실행이라 하나가 실패해도 다음으로 넘어간다. 라벨링은 빠진 쌍만 한다
-  say "[all] 라벨링 mixed (풀 v4 교체분 1,160 px)"; bash run.sh label mixed || say "!!! [all] 라벨링 실패 mixed"
-  for c in soft hard; do say "[all] 격자 mixed $c"; bash run.sh grid mixed $c || say "!!! [all] 격자 실패 mixed $c"; done
-  for p in indoor outdoor; do [ -n "${HF_TOKEN:-}" ] || [ -n "${TEACHER_MODEL:-}" ] || say "!!! [all] 토큰도 로컬 교사 가중치도 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; done
+  say "[all] 라벨링 mixed (풀 v4 교체분 1,160 px)"; H200_CHILD=1 bash run.sh label mixed || say "!!! [all] 라벨링 실패 mixed"
+  for c in soft hard; do say "[all] 격자 mixed $c"; H200_CHILD=1 bash run.sh grid mixed $c || say "!!! [all] 격자 실패 mixed $c"; done
+  for p in indoor outdoor; do [ -n "${HF_TOKEN:-}" ] || [ -n "${TEACHER_MODEL:-}" ] || say "!!! [all] 토큰도 로컬 교사 가중치도 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; H200_CHILD=1 bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; done
   # 라벨링이 둘 다 끝났으면 토큰 사본을 지운다 (이후 격자는 토큰 불필요). /app/data 가 읽기 전용이면 관리자에게 삭제 요청. 실제 무효화는 HF 계정에서 Revoke 해야 한다
   if [ -f "$OUT_ROOT/labels/indoor/teacher_labels.parquet" ] && [ -f "$OUT_ROOT/labels/outdoor/teacher_labels.parquet" ]; then
     for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -f "$tf" ] && { rm -f "$tf" 2>/dev/null && say "[all] 토큰 파일 삭제됨: $tf" || say "!!! [all] 토큰 파일을 지우지 못함(읽기 전용): $tf — 관리자에게 삭제 요청"; }; done
     unset HF_TOKEN; say "[all] 라벨링 완료 — 이후 단계는 토큰을 쓰지 않음. HF 설정에서 토큰을 Revoke 할 것"
   else say "!!! [all] 라벨이 둘 다 없어 토큰 파일을 남겨 둠(재실행용)"; fi
-  for p in indoor outdoor; do for c in soft hard; do say "[all] 격자 $p $c"; bash run.sh grid $p $c || say "!!! [all] 격자 실패 $p $c"; done; done
+  for p in indoor outdoor; do for c in soft hard; do say "[all] 격자 $p $c"; H200_CHILD=1 bash run.sh grid $p $c || say "!!! [all] 격자 실패 $p $c"; done; done
   say "[all] 완료. 결과 zip: $(ls "$OUT_ROOT"/results_*.zip 2>/dev/null | tr '\n' ' ')"; exit 0
 fi
 if [ "$MODE" = label ]; then   # 교사 라벨링: 저장소 라벨 + 이전 part 를 base 로 두고 todo 중 빠진 쌍만 라벨링 → teacher_labels.parquet (완전본). VRAM 28-30 GB

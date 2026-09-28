@@ -29,8 +29,9 @@ Fill the "container creation and code execution request" issue as follows.
 | Extra modules | none needed in the form: `run.sh` installs `requirements.txt` itself when a module is missing |
 | Command and GPU | see below |
 
-Submit one stage per request. Teacher inference, student training and evaluation are separate jobs: each one
-finishes inside a working day, and a failure names the stage that failed instead of ending a 35-hour chain.
+Submit one stage per request. On a service whose result volume survives between jobs, teacher inference, student
+training and evaluation can each be their own job. On the 2026-09 service they do not, so teacher inference is one job
+and training plus evaluation is a single `grid` job of about 21 hours.
 
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
@@ -114,8 +115,15 @@ actually reads are extracted:
 into a per-job folder and `peft` has to be installed again every time, so treat every job as starting from an empty
 work volume.
 
-Only `/app/output` carries over. That is where the teacher labels, the adapters and the tables go, and it is the
-volume with 103 GB free, which is why nothing else may be written there.
+`/app/output` does not carry over either. Measured on 2026-09-28: one job wrote the indoor teacher labels there, and
+an hour later the next job saw `/app/output` empty, holding only its own report file. Each job gets a fresh result
+volume, and the administrator retrieves that job's files afterwards.
+
+**Nothing produced by one job is visible to the next.** The repository is the only durable channel, so the teacher
+labels have to be committed to `pools/<pool>/teacher_labels.parquet` after every labeling job, and training and
+evaluation have to run inside one job. Use `grid <pool> <cond>`, not `train` followed by `eval`. The split into
+separate `train` and `eval` jobs only works where the result volume survives between jobs, for example on a local
+machine.
 
 Unpacking is therefore part of every job, and it is cheap: 30 GB takes about two minutes on this service, so a
 training job spends about twenty seconds on its 5.5 GB and an evaluation job about two seconds on its 0.4 GB. There is

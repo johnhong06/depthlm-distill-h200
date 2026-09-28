@@ -365,11 +365,14 @@ case $MODE in
          say "[train] 완료 $POOL $COND — 셀별 어댑터:"
          NOK=0; for c in $CELLS; do if [ -f "$OUT_ROOT/checkpoints/${COND}_${c}${SUFFIX}/adapter_model.safetensors" ]; then NOK=$((NOK+1)); say "  $c  OK"; else say "  $c  !!! 실패 → $OUT_ROOT/train_${COND}_${c}${SUFFIX}.log 확인"; fi; done
          say "[train] $NOK/$NCELL 셀 성공. 어댑터: $OUT_ROOT/checkpoints/${COND}_*${SUFFIX}"
-         say "[train] 다음 작업으로 요청할 것 →  bash run.sh eval $POOL $COND"
+         say "[train] 다음 단계는 bash run.sh eval $POOL $COND — 단, 어댑터가 $OUT_ROOT 에 남아 있어야 한다"
+         say "[train] 결과 볼륨이 작업 사이에 비워지는 환경(사업단 H200, 2026-09-28 실측)이면 eval 이 어댑터를 못 찾는다. 그 경우 학습과 평가를 한 작업으로 도는 bash run.sh grid $POOL $COND 를 쓸 것"
          [ "$NOK" -gt 0 ] || exit 1
          exit 0;;
   eval)  NAD=0; for c in $CELLS; do [ -f "$OUT_ROOT/checkpoints/${COND}_${c}${SUFFIX}/adapter_model.safetensors" ] && NAD=$((NAD+1)) || true; done
-         [ "$NAD" -gt 0 ] || { say "!!! [eval] $OUT_ROOT/checkpoints 에 ${COND}_*${SUFFIX} 어댑터가 없다 → bash run.sh train $POOL $COND 먼저"; exit 1; }
+         [ "$NAD" -gt 0 ] || { say "!!! [eval] $OUT_ROOT/checkpoints 에 ${COND}_*${SUFFIX} 어댑터가 없다"
+           say "!!! → 같은 파드에서 학습했다면 bash run.sh train $POOL $COND 먼저"
+           say "!!! → 결과 볼륨이 작업 사이에 비워지는 환경이면 학습 결과가 넘어오지 않는다. bash run.sh grid $POOL $COND 로 학습과 평가를 한 작업에 돌릴 것"; exit 1; }
          say "[eval] 학습된 어댑터 $NAD/$NCELL 셀"; run_cells eval_cell;;
   *)     run_cells train_cell; run_cells eval_cell;;
 esac

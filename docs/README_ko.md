@@ -17,16 +17,47 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 | 실행 명령어 | 아래 표 |
 | GPU 할당량 | 아래 표 (`1` = 18 GB 슬라이스, `7` = GPU 한 장 통째) |
 
+**한 이슈에 한 단계만 넣는다.** 교사 추론·학생 학습·평가를 따로 내면 각 작업이 하루 안에 끝나고, 실패했을 때 어느 단계가 실패했는지 바로 알 수 있다.
+
 | 이슈 | 실행 명령어 | GPU | 비고 |
 |---|---|---|---|
-| ① 스모크 | `bash run.sh smoke` | 1 | `/app/data` 아래 조각 발견 → 검증 → 30 GB 풀기(수 분) → 교사·학생 가중치 경로 출력 → 학생 다운로드 → 30 스텝 → 3 px 평가. 15 분 |
-| ② 전체 체인 | `bash run.sh all hf_토큰` | **7** | 혼합 격자 soft·hard → 실내·실외 라벨링(교사 30 GB × 4 병렬) → 실내·실외 격자 4개. 한 단계가 실패해도 다음으로 넘어감. 토큰은 라벨링에만 쓰이며 읽기 전용, 끝나면 폐기 |
+| ⓪ 점검 | `bash run.sh check` | 1 | `/app/data`·`/app/output`·작업 경로의 쓰기 권한·여유·사용량을 찍고, 압축을 어디에 풀지와 `/app/output` 에 결과가 아닌 것이 있는지 알려준다. GPU·다운로드 없음, 1 분. **가장 먼저 낸다** |
+| ① 압축 해제 | `bash run.sh data` | 1 | 조각 16개를 `SHA256SUMS_parts` 로 검증하고 `/app/data` 제자리에 한 번 푼다. `/app/data` 가 읽기 전용이면 남길 수 없으므로 이유를 찍고 실패한다. 수 분 |
+| ② 스모크 | `bash run.sh smoke` | 1 | 학생 다운로드 → 30 스텝 → 3 px 평가. 15 분 |
+| ③ 교사 추론 | `bash run.sh label <mixed\|indoor\|outdoor> hf_토큰` | **7** | 저장소 라벨이 덮지 못한 픽셀만 교사(12B)가 라벨링(30 GB × 4 병렬) → `labels/<pool>/teacher_labels.parquet` + `labels_<pool>.zip`. 토큰은 교사 가중치가 tar 에 없을 때만 필요하고 읽기 전용, 끝나면 폐기 |
+| ④ 학생 학습 | `bash run.sh train <pool> <soft\|hard>` | **7** | 8셀 동시 학습 → `checkpoints/`. 교사 라벨과 풀 이미지를 읽고 교사 가중치는 올리지 않는다. 약 12 시간. 토큰 불필요 |
+| ⑤ 평가 | `bash run.sh eval <pool> <soft\|hard>` | **7** | 어댑터 8개를 small·large 두 평가셋으로 평가 → 표·그림·zip. 약 9 시간. 교사 라벨도 풀 이미지도 읽지 않는다 |
 
-나눠서 내고 싶으면 단계별 명령도 그대로 쓸 수 있다: `bash run.sh grid <mixed|indoor|outdoor> <soft|hard>`, `bash run.sh label <indoor|outdoor> hf_xxx`. 격자는 저장소의 `pools/<pool>/teacher_labels.parquet` 가 없으면 파드에서 만든 `/app/output/labels/<pool>/teacher_labels.parquet` 를 쓴다. 이미 끝난 셀·평가·라벨은 건너뛰므로 같은 명령을 다시 내면 이어서 돈다.
+### 교사 추론 결과가 학습까지 어떻게 전달되는가
 
+교사 추론이 가장 비싼 단계다(풀 하나당 44,800 px, 처음부터면 약 3 시간). 그 결과가 학습 작업까지 살아 있어야 하므로 세 곳에 두고, 학습은 이 순서로 찾는다.
+
+1. `/app/output/labels/<pool>/teacher_labels.parquet` — 결과 원본 (완전본 23 MB)
+2. `/app/data/labels/<pool>/teacher_labels.parquet` — `/app/data` 가 쓰기 가능하면 데이터 옆에 두는 사본. `/app/output` 이 다음 파드로 넘어오지 않아도 학습이 여기서 읽는다
+3. `pools/<pool>/teacher_labels.parquet` — 저장소에 커밋된 라벨. 모든 파드가 무조건 갖고 있다
+
+`/app/output` 도 `/app/data` 도 작업 사이에 남지 않는 환경이면, 라벨링이 끝난 뒤 `labels_<pool>.zip` 을 내려받아 `pools/<pool>/teacher_labels.parquet` 로 커밋한다. 라벨링 작업이 이 안내와 파일 크기를 찍는다. `train` 은 라벨을 못 찾으면 찾아본 세 경로를 모두 적어 주고 멈추며, 라벨이 격자에 필요한 픽셀을 다 덮지 못해도 멈춘다. `label` 을 다시 내면 이미 있는 것을 base 로 이어서 라벨링한다.
+
+- 같은 명령을 다시 내면 이어서 돈다. 끝난 셀·평가·라벨 조각은 건너뛰므로 중간에 끊긴 작업은 빠진 부분만 한다. `/app/output` 을 비우면 처음부터다.
+- `train` 은 라벨이 빠진 픽셀이 있으면 시작을 거부하고 라벨링할 풀을 알려준다. `eval` 은 어댑터가 없으면 거부하고 학습 명령을 알려준다.
+- `grid <pool> <cond>`(학습+평가)와 `all`(전체)도 그대로 있지만 공용 파드에서는 권장하지 않는다. 2026-09 의 `all` 실행은 35 시간 뒤 강제 종료됐고 로그로는 어디까지 됐는지 알 수 없었다.
+- **`/app/output` 은 결과 전용이다.** 압축 해제본·모델 캐시·임시 파일은 절대 넣지 않는다. 2026-09-27 에 `/app/output` 이 100 GB 를 넘겨 실험이 강제 종료됐고, 원인은 읽기 전용이던 `/app/data` 때문에 30 GB 짜리 해제본과 7.5 GB 학생 캐시가 `/app/output` 으로 갔던 것이다.
+- **압축 해제 자체는 피할 수 없다.** `transformers` 와 이미지 로더가 파일 경로로 읽기 때문이다. 다만 30 GB 전부가 필요한 단계는 없다. 임시 디스크로 풀어야 할 때는 그 단계가 읽는 폴더만 푼다: `label` 은 풀 이미지 + 교사 가중치 29.5 GB, `train` 은 풀 이미지 5.5 GB, `eval` 은 평가셋 0.4 GB. `/app/data` 제자리 해제는 한 번에 전부 풀어 두고 모든 단계가 그걸 재사용한다.
+- 비밀 없음(기본): 30 GB tar 를 2 GB 조각 16개로 나눠 드라이브로 전달. 관리자는 `/app/data` 아래 아무 폴더에 받아 두기만 하면 된다(조각 그대로든 드라이브가 만든 zip이든). `bash run.sh data` 가 조각을 찾아(zip 안이면 흘려 넣으며) SHA256 검증 후 조각 옆 제자리에 한 번 풀고, 이후 작업은 그것을 재사용한다(이미지 6 GB + 교사 가중치 24 GB, FAIR 라이선스 사본 동봉 = 1.b.ii). 해제가 끝나면 조각 29 GB 는 지워도 된다. `/app/data` 가 읽기 전용이면 컨테이너 임시 디스크에 풀고 파드와 함께 사라지므로, 관리자에게 `/app/data` 쓰기 권한을 요청하는 편이 낫다. 학생은 공개 모델이라 실행 중 내려받아 `$WORK_ROOT/hf` 에 캐시한다. 토큰 경로(`hf_…` 인자, `/app/data/hf_token.txt`)는 대안으로만 남겨 둔다.
 - 신청 창 안에서 이슈를 순서대로 낸다. 컨테이너는 끝나면 삭제되고 `/app/output/` 만 남는다(관리자에게 파일 요청). 리포트는 65,000자까지만 오므로 표준 출력은 요약, 전체 로그는 `/app/output/` 에 쓴다. 격자마다 `results_<cond>_<pool>.zip`(체크포인트·평가·표·그림·로그) 이 만들어지고 라벨은 `labels/<pool>/teacher_labels.parquet` 에 남는다. 관리자에게 zip 6개와 라벨 2개를 요청하면 된다.
-- 비밀 없음(기본): 30 GB tar 를 2 GB 조각 16개로 나눠 드라이브로 전달. 관리자는 `/app/data` 아래 아무 폴더에 받아 두기만 하면 된다(조각 그대로든 드라이브가 만든 zip이든). `run.sh` 가 첫 실행 때 조각을 찾아(zip 안이면 흘려 넣으며) SHA256 검증 후 한 번 푼다. 그 폴더가 쓰기 가능하면 제자리에, 아니면 `/app/output/data/` 에 풀고 이후 작업은 재사용한다(이미지 6 GB + 교사 가중치 24 GB, FAIR 라이선스 사본 동봉 = 1.b.ii). 학생은 공개 모델이라 실행 중 내려받는다. 토큰 경로(`hf_…` 인자, `/app/data/hf_token.txt`)는 대안으로만 남겨 둔다.
 - GPU `7` 이면 스크립트가 자동으로 학습 8 병렬·라벨링 4 병렬로 돈다(`NPROC`, `NPROC_LABEL` 로 변경 가능). `1` 이면 순차.
+
+### 용량 (할당량이 실험을 멈추지 않게)
+
+| 무엇 | 어디 | 크기 |
+|---|---|---|
+| 해제본 (풀 이미지·평가셋·교사 가중치) | `/app/data`, 조각 옆 | 30 GB |
+| tar 조각 (해제 후 삭제 가능) | `/app/data` | 29 GB |
+| 학생 가중치 캐시 | `$WORK_ROOT/hf` | 7.5 GB |
+| 격자 1개 (어댑터 8 + 평가·표·그림·zip) | `/app/output` | 약 0.9 GB |
+| 격자 6개 전체 + 라벨 | `/app/output` | 약 6 GB |
+
+`bash run.sh check` 가 실시간 수치를 찍고 `/app/output` 에 결과가 아닌 것이 있으면 표시한다. `NEED_GB`(기본 32)는 압축을 풀기 전에 요구하는 최소 여유 공간이며, 부족하면 볼륨을 채우지 않고 먼저 멈춘다.
 
 ## 실험 목록 (6 작업)
 
@@ -54,7 +85,7 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 
 | 경로 | 내용 |
 |---|---|
-| `results/checkpoints/<cond>_<cell>_f750/` | LoRA 어댑터 (`adapter_model.safetensors`, `lora_adapter.pt`, `train.log`) |
+| `results/checkpoints/<cond>_<cell>_f750/` | LoRA 어댑터 (`adapter_model.safetensors`, `train.log`) |
 | `results/eval/eval_<cond>_<cell>_f750[_large].parquet` | 픽셀별 예측·GT·불확실도 |
 | `results/tables/table_grid_<cond>_f750[_large].md` | 셀별 δ1·CI, 행·열·고정예산 쌍대 비교 |
 | `results/figures/fig_grid_<cond>_f750[_large].png` | 예산 대 δ1 |

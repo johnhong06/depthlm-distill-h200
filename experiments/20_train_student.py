@@ -97,7 +97,7 @@ def main():
         if (step + 1) % 200 == 0 or step + 1 == total:
             msg = f"step {step+1}/{total} loss {run/max(nrun,1):.4f} lr {sch.get_last_lr()[0]:.2e} {(time.time()-t0)/(step+1):.3f}s/step"; print(msg, flush=True); log.write(msg + "\n"); log.flush(); run = 0.0; nrun = 0
         if (step + 1) % 5000 == 0: model.save_pretrained(out_dir)
-    model.save_pretrained(out_dir); torch.save({k: v.detach().cpu() for k, v in model.state_dict().items() if "lora" in k.lower()}, os.path.join(out_dir, "lora_adapter.pt")); print(f"저장 → {out_dir}  총 {time.time()-t0:.0f}s", flush=True)
+    model.save_pretrained(out_dir); print(f"저장 → {out_dir}  총 {time.time()-t0:.0f}s", flush=True)   # lora_adapter.pt 중복 저장 제거: 아무도 읽지 않으면서 셀당 29 MB 를 두 번 썼다
 
 if __name__ == "__main__":
     main()

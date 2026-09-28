@@ -1,28 +1,75 @@
 #!/usr/bin/env bash
 # DepthLM 증류 실험 — 컨테이너 진입점 (비대화형). 사용법:
+#   MODE=check                       bash run.sh        # 경로·쓰기 권한·여유 용량만 점검 (GPU 불필요, 1 분). 압축 해제 위치를 담당자와 확인할 때
+#   MODE=data                        bash run.sh        # tar 조각 검증 + 압축 해제만 (GPU 불필요, 수 분). 한 번만 하면 이후 작업이 재사용한다
 #   MODE=smoke                       bash run.sh        # 파이프라인 검증 (모델 다운로드 → 30 스텝 학습 → 3 px 평가)
-#   MODE=grid POOL=mixed COND=soft   bash run.sh        # 격자 8셀 학습 → 평가(small+large) → 표·그림   (COND = soft | hard)
+# 권장: 세 단계를 따로 요청한다 (한 작업에 몰면 24 시간을 넘기고, 중간에 죽으면 어디까지 됐는지 알기 어렵다)
+#   MODE=label POOL=mixed            bash run.sh        # ① 교사 추론 = 라벨링          → /app/output/labels/<pool>/teacher_labels.parquet
+#   MODE=train POOL=mixed COND=soft  bash run.sh        # ② 학생 학습 8셀               → /app/output/checkpoints/
+#   MODE=eval  POOL=mixed COND=soft  bash run.sh        # ③ 평가(small+large) → 표·그림·zip
+#   MODE=grid  POOL=mixed COND=soft  bash run.sh        # ②+③ 을 한 작업에 (이전 방식, 호환용)
 # 환경변수: DATA_ROOT(데이터 루트, 기본 ./data), OUT_ROOT(결과, 기본 ./results), FOCAL(750), CELLS(기본 arms.json 전체), EVAL_SETS("small large"),
 #           HF_TOKEN(gated 모델용), NPROC(병렬 학습 프로세스 수, MIG 슬라이스 격리 시 CUDA_VISIBLE_DEVICES 로 분배)
 set -euo pipefail; cd "$(dirname "$0")"; export PYTHONUNBUFFERED=1
-EXTRACTED_HERE=0   # 이 작업이 $OUT_ROOT/data 에 데이터를 풀었으면 1 → 끝날 때 지워서 결과만 남긴다 (관리자 서버에 30 GB 가 작업마다 쌓이지 않게)
-cleanup() { if [ "${H200_CHILD:-0}" = 0 ] && [ "${KEEP_DATA:-0}" = 0 ]; then
-    [ "$EXTRACTED_HERE" = 1 ] && rm -rf "$OUT_ROOT/data" && echo "[cleanup] 작업용 데이터 복사본 삭제 ($OUT_ROOT/data)"
-    [ -d /app/output ] && [ -d "$OUT_ROOT/hf" ] && rm -rf "$OUT_ROOT/hf" && echo "[cleanup] 모델 캐시 삭제 ($OUT_ROOT/hf) — 결과(체크포인트·평가·표·zip·라벨)만 남음"; fi; return 0; }
+# 규칙: /app/output 은 결과 전용이다. 압축 해제본·모델 캐시·임시 파일은 절대 여기에 두지 않는다 (2026-09-27 output 100 GB 초과로 실험이 강제 종료된 원인)
+writable() { [ -d "$1" ] || return 1; touch "$1/.h200_write_test" 2>/dev/null || return 1; rm -f "$1/.h200_write_test" 2>/dev/null || true; return 0; }
+freegb() { local g; g=$(df -Pk "$1" 2>/dev/null | awk 'NR==2{printf "%d", int($4/1048576)}') || g=""; echo "${g:-?}"; }
+usedgb() { local g; g=$(du -sk "$1" 2>/dev/null | awk '{printf "%d", int($1/1048576)}') || g=""; echo "${g:-?}"; }
+NEED_GB_EXPLICIT=${NEED_GB:+1}; NEED_GB=${NEED_GB:-32}   # 30 GB 팩을 풀기 전에 요구하는 최소 여유 공간 (GB). 명시하면 단계별 기본값보다 우선한다
+needgb() { local fg; fg=$(freegb "$1"); case $fg in ''|'?') echo "[data] $1 여유 공간 확인 불가 — 계속";; *) [ "$fg" -ge "$2" ] || { echo "!!! [data] $1 여유 ${fg} GB < 필요 $2 GB — 풀 공간이 없다. 관리자에게 여유 공간을 요청할 것"; exit 1; };; esac; }
+EXTRACTED_HERE=0   # 이 작업이 컨테이너 임시 디스크에 데이터를 풀었으면 1 → 끝날 때 지운다 (/app/data 제자리 해제본은 다음 작업이 재사용하므로 남긴다)
+cleanup() { if [ "${H200_CHILD:-0}" = 0 ] && [ "${KEEP_DATA:-0}" = 0 ] && [ "$EXTRACTED_HERE" = 1 ] && [ "${WORK_PERSISTENT:-0}" = 0 ] && [ -n "${XROOT:-}" ]; then
+    rm -rf "$XROOT" && echo "[cleanup] 임시 해제본 삭제 ($XROOT) — /app/output 에는 결과만 남음"; fi; return 0; }
 trap cleanup EXIT
 # 위치 인자: bash run.sh <smoke|label|grid|all> [pool] [cond] [hf_token]   (환경변수 MODE/POOL/COND/HF_TOKEN 도 동일하게 동작; 토큰은 /app/data/hf_token.txt 로도 가능)
 # all = 혼합 격자 2개 → 실내·실외 라벨링(라벨이 없을 때만) → 실내·실외 격자 4개를 한 작업으로 이어서 실행
 ARGS=(); for a in "$@"; do case $a in hf_*) export HF_TOKEN=$a;; *) ARGS+=("$a");; esac; done   # hf_ 로 시작하는 인자는 위치와 무관하게 토큰
 MODE=${ARGS[0]:-${MODE:-smoke}}; POOL=${ARGS[1]:-${POOL:-mixed}}; COND=${ARGS[2]:-${COND:-soft}}
+case $MODE in check|data|smoke|label|train|eval|grid|all) ;; *) echo "!!! 알 수 없는 MODE=$MODE — check|data|smoke|label|train|eval|grid|all 중 하나"; exit 1;; esac
 FOCAL=${FOCAL:-750}; EVAL_SETS=${EVAL_SETS:-"small large"}; export HF_HUB_DISABLE_PROGRESS_BARS=1
-# 사업단 파드 규격: 데이터는 /app/data (읽기), 결과는 /app/output (파드 종료 후 보존). 없으면 로컬 기본값.
+# 사업단 파드 규격: 데이터는 /app/data, 결과는 /app/output (파드 종료 후 보존). 없으면 로컬 기본값.
 export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data/depthlm_distill_h200 ] && echo /app/data/depthlm_distill_h200 || { [ -d /app/data ] && echo /app/data || echo $PWD/data; })}   # 관리자가 tar 를 푼 폴더 우선
 export OUT_ROOT=${OUT_ROOT:-$([ -d /app/output ] && echo /app/output || echo $PWD/results)}; mkdir -p "$OUT_ROOT"
 DATA_SRC=$DATA_ROOT   # 팩 파일이 놓인 원래 위치 (풀린 뒤 DATA_ROOT 가 바뀌어도 추가 팩은 여기서 찾는다)
+# 압축 해제본·모델 캐시가 갈 곳. 1순위 /app/data (쓰기 가능하면 tar 조각 옆에 제자리 해제 → 사본 0), 2순위 컨테이너 임시 디스크 (파드와 함께 사라짐). /app/output 은 후보가 아니다
+WORK_ROOT=${WORK_ROOT:-$(writable /app/data && echo /app/data || echo "${TMPDIR:-/tmp}/h200_work")}
+case $WORK_ROOT in /app/output*) echo "!!! WORK_ROOT 가 /app/output 을 가리킴 — 결과 전용 경로다. 중단"; exit 1;; esac
+mkdir -p "$WORK_ROOT"; XROOT=$WORK_ROOT/h200_extracted   # 제자리 해제가 불가능할 때만 쓰는 대체 경로
+case $WORK_ROOT in /app/data*) WORK_PERSISTENT=1;; *) WORK_PERSISTENT=0;; esac   # /app/data 아래면 파드가 끝나도 남는다 → 지우지 않고 다음 작업이 재사용
+# 단계마다 실제로 읽는 것만 푼다 (임시 디스크로 풀 때만 적용. /app/data 제자리 해제는 한 번에 전부 풀어 두고 모든 단계가 재사용한다)
+#   label 교사 추론 = 풀 이미지 + 교사 가중치 | train 학생 학습 = 풀 이미지만 (교사 가중치 불필요) | eval 평가 = 평가셋만 (풀 이미지·교사 가중치 불필요)
+case $MODE in label) NEED_MEMBERS="pool models";; train) NEED_MEMBERS="pool";; eval) NEED_MEMBERS="eval";; grid) NEED_MEMBERS="pool eval";; *) NEED_MEMBERS="";; esac
 # 토큰: 기본은 이슈 명령 인자(hf_...). 대안으로 /app/data/hf_token.txt 파일도 읽는다
 for tf in /app/data/hf_token.txt "$DATA_ROOT/hf_token.txt"; do [ -z "${HF_TOKEN:-}" ] && [ -f "$tf" ] && export HF_TOKEN=$(tr -d '[:space:]' < "$tf") && echo "[setup] HF token loaded from $tf"; done
-# 파드(/app/output 존재)에서는 HF 가중치 캐시를 /app/output/hf 에 두어 다음 작업이 재다운로드하지 않게 한다
-[ -d /app/output ] && export HF_HOME=${HF_HOME:-/app/output/hf}
+# HF 가중치 캐시(학생 7.5 GB)는 WORK_ROOT 에 둔다. /app/data 가 쓰기 가능하면 다음 작업이 재다운로드하지 않고, 아니면 파드와 함께 사라진다. /app/output 에는 두지 않는다
+export HF_HOME=${HF_HOME:-$WORK_ROOT/hf}
+case $HF_HOME in /app/output*) echo "[setup] HF_HOME 이 /app/output 을 가리켜 $WORK_ROOT/hf 로 되돌림 (결과 전용 경로)"; export HF_HOME=$WORK_ROOT/hf;; esac
+if [ "$MODE" = check ]; then   # 압축 해제 위치·쓰기 권한·여유 용량만 확인한다. GPU·모델·데이터 불필요
+  echo "=== 경로 점검 ($(date '+%F %T')) ==="
+  for d in /app/data /app/output "$WORK_ROOT"; do
+    if [ -d "$d" ]; then echo "  $d  →  $(writable "$d" && echo '쓰기 가능' || echo '읽기 전용'),  여유 $(freegb "$d") GB,  사용 $(usedgb "$d") GB"
+    else echo "  $d  →  없음"; fi; done
+  echo "=== 해제 계획 ==="
+  PD=""; for d in /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PD" ] && PD=$(find "$d" -maxdepth 3 -name "depthlm_distill_h200_app_data.tar.part_00" -printf "%h\n" 2>/dev/null | head -1 || true); done
+  PX=""; for d in "$XROOT" /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PX" ] && PX=$(find "$d" -maxdepth 4 -type d -name "depthlm_distill_h200" 2>/dev/null | head -1 || true); done
+  if [ -n "$PX" ] && [ -d "$PX/pool" ]; then echo "  이미 풀려 있음: $PX  (풀 이미지 $(find "$PX/pool" -type f | wc -l) 장) → 추가 해제 없음"
+  elif [ -n "$PD" ]; then echo "  조각 위치: $PD  ($(ls "$PD"/depthlm_distill_h200_app_data.tar.part_* 2>/dev/null | wc -l)/16 개, 체크섬 $([ -f "$PD/SHA256SUMS_parts" ] && echo 있음 || echo 없음))"
+    if writable "$PD"; then echo "  → 제자리 해제 (사본 없음). $PD 에 30 GB 추가, 여유 $(freegb "$PD") GB"
+    else echo "  → 조각 폴더가 읽기 전용이므로 $XROOT 에 해제. 여유 $(freegb "$WORK_ROOT") GB"
+         echo "  담당자 확인 필요: /app/data 를 쓰기 가능하게 해 주면 30 GB 사본이 아예 생기지 않는다"; fi
+  else echo "  조각(depthlm_distill_h200_app_data.tar.part_00)을 /app/data 아래에서 찾지 못함"; fi
+  echo "DATA_ROOT=$DATA_ROOT"; echo "WORK_ROOT=$WORK_ROOT"; echo "XROOT=$XROOT"; echo "OUT_ROOT=$OUT_ROOT (결과 전용)"; echo "HF_HOME=$HF_HOME"
+  echo "=== 교사 라벨 (학생 학습이 읽을 것) ==="
+  for pl in mixed indoor outdoor; do
+    LF=""; for c in "$OUT_ROOT/labels/$pl/teacher_labels.parquet" "$WORK_ROOT/labels/$pl/teacher_labels.parquet" "pools/$pl/teacher_labels.parquet"; do
+      { [ -z "$LF" ] && [ -f "$c" ] && LF=$c; } || true; done
+    if [ -n "$LF" ]; then echo "  $pl  →  $LF  ($(du -h "$LF" | cut -f1))"
+    else echo "  $pl  →  없음.  bash run.sh label $pl 을 먼저 요청할 것"; fi; done
+  echo "=== /app/output 점검 (결과만 있어야 한다) ==="
+  for bad in data hf h200_extracted data_pack; do [ -e "$OUT_ROOT/$bad" ] && echo "  !!! $OUT_ROOT/$bad 가 있다 ($(usedgb "$OUT_ROOT/$bad") GB) — 결과가 아니므로 지울 것" || true; done
+  ls -A "$OUT_ROOT" 2>/dev/null | head -20 | sed 's/^/  /'
+  exit 0
+fi
 # torch 가 2.5 미만이면(Docker Hub pytorch/pytorch:latest = 2.2.1) transformers 5 가 못 돌므로 cu128 빌드 2.11 로 교체 (호스트 드라이버 ≥ 570). 2.5 이상이면 손대지 않는다
 python - <<'PYV' || { echo "[setup] torch 가 오래됨 → torch 2.11 + torchvision 0.26 (cu128) 설치, 3 GB"; pip uninstall -y -q torchaudio torchtext torchdata >/dev/null 2>&1 || true; pip install -q "torch==2.11.0" "torchvision==0.26.0" --index-url https://download.pytorch.org/whl/cu128 2>&1 | tail -2; }   # 옛 torchaudio 는 새 torch 와 심볼이 안 맞아 import 를 깨뜨리므로 제거
 import torch; v = tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2]); assert v >= (2, 5), torch.__version__
@@ -48,9 +95,9 @@ PYT
     if [ "$MODE" = smoke ]; then say "!!! [setup] 토큰 없이 스모크 계속 (학생 모델은 공개). 새 토큰(만료 없음)으로 다시 요청할 것"
     else say "!!! [setup] 토큰이 무효라 데이터·교사 다운로드가 불가능 → 종료. 새 토큰(만료 없음)으로 다시 요청할 것"; exit 1; fi; fi
 else say "[setup] HF 토큰 없음 — 학생(공개)은 다운로드 가능. 교사는 로컬 가중치(/app/data 조각)가 있으면 토큰 불필요"; fi
-# 관리자 부담 최소화: 드라이브의 조각(depthlm_distill_h200_app_data.tar.part_*)을 /app/data 아래 아무 폴더에 받아 두기만 하면 스크립트가 검증하고 /app/output/data 에 한 번 푼다
+# 관리자 부담 최소화: 드라이브의 조각(depthlm_distill_h200_app_data.tar.part_*)을 /app/data 아래 아무 폴더에 받아 두기만 하면 스크립트가 검증하고 한 번 푼다 (제자리, 불가능하면 $XROOT — /app/output 은 아니다)
 if [ ! -d "$DATA_ROOT/pool" ]; then
-  PRE=""; for d in "$OUT_ROOT/data" /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PRE" ] && PRE=$(find "$d" -maxdepth 4 -type d -name "depthlm_distill_h200" 2>/dev/null | head -1 || true); done
+  PRE=""; for d in "$XROOT" /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PRE" ] && PRE=$(find "$d" -maxdepth 4 -type d -name "depthlm_distill_h200" 2>/dev/null | head -1 || true); done
   if [ -n "$PRE" ] && [ -d "$PRE/pool" ]; then export DATA_ROOT=$PRE; echo "[data] 이미 풀린 폴더 사용: $DATA_ROOT"
   else
     PDIR=""; for d in /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PDIR" ] && PDIR=$(find "$d" -maxdepth 3 -name "depthlm_distill_h200_app_data.tar.part_00" -printf "%h\n" 2>/dev/null | head -1 || true); done   # set -e/pipefail 안전
@@ -63,8 +110,8 @@ print(" ".join(z for z in sys.argv[1:] if zipfile.is_zipfile(z) and any(n.endswi
 PYL
 )
       if [ -n "$ZIPS" ]; then
-        ZD=$(dirname "$(echo $ZIPS | cut -d' ' -f1)"); if touch "$ZD/.write_test" 2>/dev/null; then rm -f "$ZD/.write_test"; XDIR=$ZD; echo "[data] zip 발견: $ZIPS → 폴더가 쓰기 가능, 제자리에서 풀기"; else XDIR=$OUT_ROOT/data; echo "[data] zip 발견: $ZIPS → 읽기 전용, $OUT_ROOT/data 에 풀기 (30 GB)"; fi
-        mkdir -p "$XDIR"; python - "$XDIR" $ZIPS <<'PYZ' && export DATA_ROOT=$XDIR/depthlm_distill_h200 && { [ "$XDIR" = "$OUT_ROOT/data" ] && EXTRACTED_HERE=1 || true; } && echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)" || { echo "!!! [data] zip 에서 풀기 실패 (조각 누락 또는 SHA256 불일치)"; exit 1; }
+        ZD=$(dirname "$(echo $ZIPS | cut -d' ' -f1)"); if touch "$ZD/.write_test" 2>/dev/null; then rm -f "$ZD/.write_test"; XDIR=$ZD; echo "[data] zip 발견: $ZIPS → 폴더가 쓰기 가능, 제자리에서 풀기"; else XDIR=$XROOT; echo "[data] zip 발견: $ZIPS → 읽기 전용, $XROOT 에 풀기 (30 GB). /app/output 에는 풀지 않는다"; fi
+        mkdir -p "$XDIR"; needgb "$XDIR" "$NEED_GB"; python - "$XDIR" $ZIPS <<'PYZ' && export DATA_ROOT=$XDIR/depthlm_distill_h200 && { [ "$XDIR" = "$XROOT" ] && EXTRACTED_HERE=1 || true; } && echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)" || { echo "!!! [data] zip 에서 풀기 실패 (조각 누락 또는 SHA256 불일치)"; exit 1; }
 import sys, zipfile, hashlib, subprocess, os, re, shutil
 xdir, zips = sys.argv[1], sys.argv[2:]; members = {}; sums = {}
 for z in zips:
@@ -97,16 +144,29 @@ PYZ
     elif [ -n "$PDIR" ]; then
       NP=$(ls "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | wc -l)
       [ "$NP" = 16 ] && [ -f "$PDIR/SHA256SUMS_parts" ] || { echo "!!! [data] 조각 $NP/16 개, 체크섬 파일 $([ -f "$PDIR/SHA256SUMS_parts" ] && echo 있음 || echo 없음) — 아직 업로드 중일 수 있음. 다 올라간 뒤 다시 요청할 것"; exit 1; }
-      if touch "$PDIR/.write_test" 2>/dev/null; then rm -f "$PDIR/.write_test"; XDIR=$PDIR; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 쓰기 가능 → 제자리에서 풀기 (복사본 없음)"
-      else XDIR=$OUT_ROOT/data; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 읽기 전용 → $OUT_ROOT/data 에 풀기 (30 GB)"; fi
+      if writable "$PDIR"; then XDIR=$PDIR; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 쓰기 가능 → 제자리에서 풀기 (사본 없음)"
+      else XDIR=$XROOT; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 읽기 전용 → $XROOT 에 풀기 (30 GB). /app/output 에는 풀지 않는다"
+           echo "[data] 담당자에게 /app/data 쓰기 권한을 요청하면 이 사본이 사라진다"; fi
+      mkdir -p "$XDIR"; NG=$NEED_GB   # 임시 디스크에 단계별로 부분 해제할 때는 요구 공간도 줄어든다
+      if [ -z "${NEED_GB_EXPLICIT:-}" ] && [ "$XDIR" = "$XROOT" ] && [ "$WORK_PERSISTENT" = 0 ]; then case $MODE in train) NG=8;; eval) NG=2;; esac; fi
+      needgb "$XDIR" "$NG"
       (cd "$PDIR" && sha256sum -c --quiet SHA256SUMS_parts) && echo "[data] 조각 SHA256 검증 통과" || { echo "!!! [data] 조각 SHA256 불일치 — 업로드가 덜 됐거나 깨짐. 다시 받을 것"; exit 1; }
       TMPX=$XDIR/.extracting_$$; rm -rf "$TMPX"; mkdir -p "$TMPX"   # 임시 폴더에 풀고 성공했을 때만 최종 이름으로 (중간에 죽어도 반쪽짜리 폴더가 남지 않음)
-      if cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$TMPX" && mv "$TMPX/depthlm_distill_h200" "$XDIR/depthlm_distill_h200"; then rm -rf "$TMPX"; export DATA_ROOT=$XDIR/depthlm_distill_h200; [ "$XDIR" = "$OUT_ROOT/data" ] && EXTRACTED_HERE=1; echo "[data] 풀기 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l), 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l), 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" | grep -c safetensors)"
+      MEM=""   # 임시 디스크로 푸는 경우에만 이 단계가 읽는 폴더로 한정 (train 5.5 GB, eval 0.4 GB, label 29.5 GB, 전체 30 GB)
+      if [ "$XDIR" = "$XROOT" ] && [ "$WORK_PERSISTENT" = 0 ] && [ -n "$NEED_MEMBERS" ]; then
+        for m in $NEED_MEMBERS; do MEM="$MEM depthlm_distill_h200/$m"; done
+        echo "[data] $MODE 단계가 읽는 것만 풀기:$MEM"; fi
+      if cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$TMPX" $MEM && mv "$TMPX/depthlm_distill_h200" "$XDIR/depthlm_distill_h200"; then
+        rm -rf "$TMPX"; export DATA_ROOT=$XDIR/depthlm_distill_h200
+        { [ "$XDIR" = "$XROOT" ] && EXTRACTED_HERE=1 || true; }
+        # 관리자 팩에는 풀 v4 새 이미지가 이미 들어 있다(extra_done.txt). 부분 해제에는 그 표시 파일이 없으므로 대신 남겨 추가 팩을 다시 덧씌우지 않게 한다
+        { [ -n "$MEM" ] && touch "$DATA_ROOT/.extra_done" || true; }
+        echo "[data] 풀기 완료: $DATA_ROOT ($(du -sh "$DATA_ROOT" 2>/dev/null | cut -f1)) — 풀 이미지 $(find "$DATA_ROOT/pool" -type f 2>/dev/null | wc -l) 장, 평가 파일 $(find "$DATA_ROOT/eval" -type f 2>/dev/null | wc -l) 개, 교사 가중치 조각 $(ls "$DATA_ROOT/models/DepthLM" 2>/dev/null | grep -c safetensors || true) 개"
       else rm -rf "$TMPX"; echo "!!! [data] 풀기 실패 — 임시 폴더 정리함. 다시 요청할 것"; exit 1; fi
     fi
   fi
 fi
-# 데이터 확보 순서: ① /app/data 에 풀려 있음 → ② 이전 작업이 /app/output/data 에 풀어 둠 → ③ /app/data 의 tar 분할본 → ④ HF 비공개 데이터셋(DATA_REPO)에서 토큰으로 내려받음
+# 데이터 확보 순서: ① /app/data 에 풀려 있음 → ② 이전 작업이 $XROOT 에 풀어 둠 → ③ /app/data 의 tar 분할본 → ④ HF 비공개 데이터셋(DATA_REPO)에서 토큰으로 내려받음
 # 추가 팩(depthlm_distill_data_extra.tar = 실내 풀 v4 의 새 이미지 205 장)은 본 팩 위에 한 번만 덧씌운다 (.extra_done 표시)
 hf_fetch() { local out=$1; shift; python - "$DATA_REPO" "$out" "$@" <<'PYD'
 import sys, time; from huggingface_hub import snapshot_download
@@ -121,27 +181,27 @@ else: sys.exit(1)
 PYD
 }
 if [ ! -d "$DATA_ROOT/pool" ]; then
-  if [ -d "$OUT_ROOT/data/pool" ]; then export DATA_ROOT=$OUT_ROOT/data
+  if [ -d "$XROOT/pool" ]; then export DATA_ROOT=$XROOT
   else
     PACK=""; for d in "$DATA_ROOT" /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PACK" ] && PACK=$(find "$d" -maxdepth 3 -name "depthlm_distill_data.tar.part_aa" -printf "%h\n" 2>/dev/null | head -1 || true); done
     if [ -z "$PACK" ] && [ -n "${HF_TOKEN:-}" ]; then
-      echo "[data] $DATA_REPO 에서 데이터 팩 다운로드 (6 GB)"; mkdir -p "$OUT_ROOT/data_pack"
-      hf_fetch "$OUT_ROOT/data_pack" "depthlm_distill_data.tar.part_*" "SHA256SUMS" && PACK=$OUT_ROOT/data_pack || echo "!!! [data] 다운로드 실패 — 토큰이 $DATA_REPO 를 읽을 수 있는지 확인"
+      echo "[data] $DATA_REPO 에서 데이터 팩 다운로드 (6 GB)"; mkdir -p "$WORK_ROOT/data_pack"
+      hf_fetch "$WORK_ROOT/data_pack" "depthlm_distill_data.tar.part_*" "SHA256SUMS" && PACK=$WORK_ROOT/data_pack || echo "!!! [data] 다운로드 실패 — 토큰이 $DATA_REPO 를 읽을 수 있는지 확인"
     fi
     if [ -n "$PACK" ]; then
       [ -f "$PACK/SHA256SUMS" ] && { (cd "$PACK" && sha256sum -c --quiet SHA256SUMS) && echo "[data] SHA256 검증 통과" || { echo "!!! [data] SHA256 불일치 — 분할본이 깨짐"; exit 1; }; }
-      mkdir -p "$OUT_ROOT/data"; cat "$PACK"/depthlm_distill_data.tar.part_* | tar -xf - -C "$OUT_ROOT/data" --strip-components=1 && export DATA_ROOT=$OUT_ROOT/data
-      [ "$PACK" = "$OUT_ROOT/data_pack" ] && rm -rf "$OUT_ROOT/data_pack"; echo "[data] 풀기 완료: $(find "$DATA_ROOT/pool" -type f | wc -l) 풀 이미지, $(find "$DATA_ROOT/eval" -type f | wc -l) 평가 파일"
+      mkdir -p "$XROOT"; needgb "$XROOT" 8; cat "$PACK"/depthlm_distill_data.tar.part_* | tar -xf - -C "$XROOT" --strip-components=1 && { export DATA_ROOT=$XROOT; EXTRACTED_HERE=1; }
+      { [ "$PACK" = "$WORK_ROOT/data_pack" ] && rm -rf "$WORK_ROOT/data_pack" || true; }; echo "[data] 풀기 완료: $(find "$DATA_ROOT/pool" -type f | wc -l) 풀 이미지, $(find "$DATA_ROOT/eval" -type f | wc -l) 평가 파일"
     fi
   fi
 fi
 if [ -d "$DATA_ROOT/pool" ] && [ ! -f "$DATA_ROOT/.extra_done" ] && [ ! -f "$DATA_ROOT/extra_done.txt" ]; then   # 추가 팩 (실내 v4 새 이미지). 관리자 묶음에는 이미 포함(extra_done.txt)
   EX=""; for d in /app/data "$DATA_SRC" "$DATA_ROOT"; do [ -d "$d" ] && [ -z "$EX" ] && EX=$(find "$d" -maxdepth 3 -name "depthlm_distill_data_extra.tar" -printf "%h\n" 2>/dev/null | head -1 || true); done
-  if [ -z "$EX" ] && [ -n "${HF_TOKEN:-}" ]; then mkdir -p "$OUT_ROOT/data_pack"; hf_fetch "$OUT_ROOT/data_pack" "depthlm_distill_data_extra.tar" "SHA256SUMS_extra" >/dev/null 2>&1 || true; [ -f "$OUT_ROOT/data_pack/depthlm_distill_data_extra.tar" ] && EX=$OUT_ROOT/data_pack; fi
+  if [ -z "$EX" ] && [ -n "${HF_TOKEN:-}" ]; then mkdir -p "$WORK_ROOT/data_pack"; hf_fetch "$WORK_ROOT/data_pack" "depthlm_distill_data_extra.tar" "SHA256SUMS_extra" >/dev/null 2>&1 || true; [ -f "$WORK_ROOT/data_pack/depthlm_distill_data_extra.tar" ] && EX=$WORK_ROOT/data_pack; fi
   if [ -n "$EX" ] && [ -w "$DATA_ROOT" ]; then
     [ -f "$EX/SHA256SUMS_extra" ] && { (cd "$EX" && sha256sum -c --quiet SHA256SUMS_extra) || { echo "!!! [data] 추가 팩 SHA256 불일치"; exit 1; }; }
     tar -xf "$EX/depthlm_distill_data_extra.tar" -C "$DATA_ROOT" --strip-components=1 && touch "$DATA_ROOT/.extra_done" && echo "[data] 추가 팩 풀기 완료 ($(tar -tf "$EX/depthlm_distill_data_extra.tar" | grep -cE '\.(png|jpg)$') 장)"
-    [ "$EX" = "$OUT_ROOT/data_pack" ] && rm -rf "$OUT_ROOT/data_pack"
+    { [ "$EX" = "$WORK_ROOT/data_pack" ] && rm -rf "$WORK_ROOT/data_pack" || true; }
   else echo "!!! [data] 추가 팩(depthlm_distill_data_extra.tar) 없음 — 실내 풀 v4 의 새 이미지 205 장이 없어 실내 라벨링·격자는 실패함 (HF 데이터셋에 올렸는지 확인)"; fi
 fi
 # 모델 가중치가 /app/data/models 에 있으면 그것을 쓰고, 없으면 Hugging Face 에서 내려받음 (인터넷 필요)
@@ -152,6 +212,19 @@ for d in /app/data "$DATA_SRC"; do [ -d "$d" ] || continue   # 관리자가 가�
   [ -z "${STUDENT_MODEL:-}" ] && q=$(find -L "$d" -maxdepth 4 -type d -name "Qwen2.5-VL-3B-Instruct" 2>/dev/null | head -1 || true) && [ -n "$q" ] && export STUDENT_MODEL=$q; done
 echo "[setup] 교사 가중치: ${TEACHER_MODEL:-facebook/DepthLM (HF, 토큰 필요)} | 학생 가중치: ${STUDENT_MODEL:-Qwen/Qwen2.5-VL-3B-Instruct (HF 공개)}"
 say "MODE=$MODE POOL=$POOL COND=$COND FOCAL=$FOCAL DATA_ROOT=$DATA_ROOT OUT_ROOT=$OUT_ROOT"
+if [ "$MODE" = data ]; then   # 압축 해제만 하고 끝낸다. 한 번 해 두면 label/train/eval 작업이 그대로 재사용한다
+  [ -d "$DATA_ROOT/pool" ] && [ -d "$DATA_ROOT/eval" ] || { say "!!! [data] 준비 실패 — DATA_ROOT($DATA_ROOT) 에 pool/ eval/ 이 없다"; exit 1; }
+  say "[data] 준비 완료: 풀 이미지 $(find "$DATA_ROOT/pool" -type f | wc -l) 장, 평가 파일 $(find "$DATA_ROOT/eval" -type f | wc -l) 개"
+  say "[data] 위치: $DATA_ROOT  (여유 $(freegb "$DATA_ROOT") GB)"
+  if [ "$WORK_PERSISTENT" = 0 ] && [ "$EXTRACTED_HERE" = 1 ]; then
+    say "!!! [data] /app/data 가 읽기 전용이라 컨테이너 임시 디스크($XROOT)에 풀렸다. 파드가 끝나면 사라지므로 이 작업은 아무것도 남기지 못한다"
+    say "!!! [data] 담당자에게 /app/data 쓰기 권한을 요청할 것. 권한이 없으면 data 모드를 건너뛰고 label/train/eval 을 바로 요청하면 된다 (각 작업이 시작할 때 임시 디스크에 스스로 풀고, /app/output 은 건드리지 않는다)"
+    exit 1
+  fi
+  say "[data] $DATA_ROOT 에 남았다 (/app/data 아래라 파드가 끝나도 유지) — 다음 작업(label/train/eval)은 다시 풀지 않는다"
+  say "[data] tar 조각(약 29 GB)은 이제 지워도 된다: 관리자에게 depthlm_distill_h200_app_data.tar.part_* 삭제 요청"
+  say "[data] 다음 작업으로 요청할 것 →  bash run.sh label $POOL"; exit 0
+fi
 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | tee -a "$LOG" || say "nvidia-smi 없음"
 GPU_MB=$(python -c "import torch;print(int(torch.cuda.get_device_properties(0).total_memory/2**20) if torch.cuda.is_available() else 0)")   # nvidia-smi 는 컨테이너에서 메모리 값을 못 줄 수 있어 torch 로 판정
 DEVS=($(nvidia-smi -L 2>/dev/null | grep -oE "MIG-[0-9a-f-]+" || true)); NDEV=${#DEVS[@]}   # MIG 슬라이스가 여러 개 보이면 셀을 슬라이스별로 분배
@@ -168,6 +241,7 @@ if [ "$MODE" = smoke ]; then
   say "[smoke] 완료. 결과: $OUT_ROOT/eval/eval_smoke.parquet, 어댑터: $OUT_ROOT/checkpoints/soft_smoke"; exit 0
 fi
 if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위 실행이라 하나가 실패해도 다음으로 넘어간다. 라벨링은 빠진 쌍만 한다
+  say "!!! [all] 권장하지 않음 — 2026-09 실행에서 35 시간 뒤 강제 종료됐고 어디까지 됐는지 로그로 추적하기 어려웠다. label → train → eval 을 따로 요청할 것"
   say "[all] 라벨링 mixed (풀 v4 교체분 1,160 px)"; H200_CHILD=1 bash run.sh label mixed || say "!!! [all] 라벨링 실패 mixed"
   for c in soft hard; do say "[all] 격자 mixed $c"; H200_CHILD=1 bash run.sh grid mixed $c || say "!!! [all] 격자 실패 mixed $c"; done
   for p in indoor outdoor; do [ -n "${HF_TOKEN:-}" ] || [ -n "${TEACHER_MODEL:-}" ] || say "!!! [all] 토큰도 로컬 교사 가중치도 없음 — $p 라벨링은 실패할 것"; say "[all] 라벨링 $p"; H200_CHILD=1 bash run.sh label $p || say "!!! [all] 라벨링 실패 $p"; done
@@ -181,6 +255,7 @@ if [ "$MODE" = all ]; then   # 한 이슈로 전체 체인. 각 단계는 하위
 fi
 if [ "$MODE" = label ]; then   # 교사 라벨링: 저장소 라벨 + 이전 part 를 base 로 두고 todo 중 빠진 쌍만 라벨링 → teacher_labels.parquet (완전본). VRAM 28-30 GB
   [ -d "$DATA_ROOT/pool" ] || { say "!!! DATA_ROOT 에 pool/ 없음"; exit 1; }; LD=$OUT_ROOT/labels/$POOL; mkdir -p "$LD"
+  { [ -f "$WORK_ROOT/labels/$POOL/teacher_labels.parquet" ] && cp -n "$WORK_ROOT/labels/$POOL/teacher_labels.parquet" "$LD/part_persisted.parquet" 2>/dev/null && say "[label] 이전 작업의 영속 사본을 base 로 이어서 라벨링"; } || true
   python - "$POOL" "$NPROC_LABEL" "$LD" <<'PYS' | tee -a "$LOG"
 import sys, os, glob, pandas as pd; pool, n, ld = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 todo = pd.read_parquet(f"pools/{pool}/todo_label.parquet")[["image_id", "pixel_index"]].drop_duplicates()
@@ -207,22 +282,47 @@ d = d.merge(todo, on=["image_id", "pixel_index"]); d.to_parquet(f"{ld}/teacher_l
 print(f"[label] {pool} 병합 {len(d)} px / 필요 {len(todo)} px (부족 {miss}), 파싱 실패 {d.teacher_greedy1.isna().mean()*100:.2f}%, 질량 중앙 {d.teacher_mass.median():.3f}"); sys.exit(1 if miss else 0)
 PYS
   cat "$LD/merge.txt" | tee -a "$LOG"; [ "$MRC" = 0 ] || { say "!!! [label] $POOL 라벨 부족 — 같은 명령을 다시 내면 이어서 라벨링"; exit 1; }
-  say "[label] 완료: $LD/teacher_labels.parquet"; exit 0
+  say "[label] 완료: $LD/teacher_labels.parquet ($(du -h "$LD/teacher_labels.parquet" | cut -f1))"
+  if [ "$WORK_PERSISTENT" = 1 ]; then
+    mkdir -p "$WORK_ROOT/labels/$POOL" && cp -f "$LD/teacher_labels.parquet" "$WORK_ROOT/labels/$POOL/teacher_labels.parquet" \
+      && say "[label] 영속 사본: $WORK_ROOT/labels/$POOL/teacher_labels.parquet — 다음 파드가 /app/output 을 못 보더라도 학습이 여기서 읽는다" \
+      || say "!!! [label] 영속 사본 복사 실패 (학습은 /app/output 경로로 계속 시도한다)"
+  else say "!!! [label] /app/data 가 읽기 전용이라 영속 사본을 둘 수 없다 — 아래 커밋 절차를 반드시 할 것"; fi
+  say "[label] /app/output 이 파드 사이에 넘어오지 않으면 이 parquet 를 내려받아 저장소의 pools/$POOL/teacher_labels.parquet 로 커밋할 것 (그러면 모든 파드가 저장소에서 읽는다)"
+  python - "$LD/teacher_labels.parquet" "$OUT_ROOT/labels_${POOL}.zip" <<'PYZ' 2>&1 | tee -a "$LOG" || say "!!! [label] 라벨 zip 생성 실패 (parquet 는 그대로 있음)"
+import sys, os, zipfile   # 결과 zip 은 labels/ 를 제외하므로 라벨만 따로 묶어 한 파일로 내려받게 한다
+src, dst = sys.argv[1:3]
+with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z: z.write(src, os.path.basename(src))
+print(f"[label] 내려받을 파일: {dst}  {os.path.getsize(dst)/1e6:.1f} MB")
+PYZ
+  say "[label] 다음 작업으로 요청할 것 →  bash run.sh train $POOL soft"; exit 0
 fi
-# --- grid ---  태그 = <cond>_<cell>_<pool>_f<focal>  (풀이 달라도 체크포인트·평가 파일이 겹치지 않음)
+# --- train / eval / grid ---  태그 = <cond>_<cell>_<pool>_f<focal>  (풀이 달라도 체크포인트·평가 파일이 겹치지 않음)
+# train = 학습 8셀만, eval = 평가+표+zip 만, grid = 둘 다(호환용). 학습과 평가를 따로 요청하면 한 작업이 12 시간대로 끝나고 어디까지 됐는지 분명해진다
 SUFFIX=_${POOL}_f${FOCAL}; ARMS=pools/$POOL/arms.json; PCFG=configs/pool_${POOL}.yaml
-LABELS=$OUT_ROOT/labels/$POOL/teacher_labels.parquet; [ -f "$LABELS" ] || LABELS=pools/$POOL/teacher_labels.parquet   # 파드에서 병합한 완전본 우선, 없으면 저장소 라벨
-[ -f "$ARMS" ] && [ -f "$LABELS" ] && [ -f "$PCFG" ] || { say "!!! 풀 파일 없음: $ARMS $LABELS $PCFG"; exit 1; }
-[ -d "$DATA_ROOT/pool" ] && [ -d "$DATA_ROOT/eval" ] || { say "!!! DATA_ROOT 에 pool/ eval/ 없음 → scripts/fetch_data.sh 먼저"; exit 1; }
+# 교사 라벨 탐색 순서: ① 이 파드의 결과 ② /app/data 에 남긴 영속 사본 (파드 사이에 /app/output 이 안 넘어와도 살아남음) ③ 저장소에 커밋된 라벨
+LABEL_TRIED="$OUT_ROOT/labels/$POOL/teacher_labels.parquet | $WORK_ROOT/labels/$POOL/teacher_labels.parquet | pools/$POOL/teacher_labels.parquet"
+LABELS=""; for c in "$OUT_ROOT/labels/$POOL/teacher_labels.parquet" "$WORK_ROOT/labels/$POOL/teacher_labels.parquet" "pools/$POOL/teacher_labels.parquet"; do
+  { [ -z "$LABELS" ] && [ -f "$c" ] && LABELS=$c; } || true; done
+[ -f "$ARMS" ] || { say "!!! arms 파일 없음: $ARMS"; exit 1; }
+if [ "$MODE" = eval ]; then [ -d "$DATA_ROOT/eval" ] || { say "!!! DATA_ROOT 에 eval/ 없음 → bash run.sh data 먼저"; exit 1; }   # 평가는 교사 라벨도 풀 이미지도 쓰지 않는다 (어댑터 + 평가셋만)
+else
+  [ -n "$LABELS" ] || { say "!!! 교사 라벨을 찾지 못했다. 찾아본 곳: $LABEL_TRIED"; say "!!! → bash run.sh label $POOL 을 먼저 요청할 것"; exit 1; }
+  [ -f "$PCFG" ] || { say "!!! 풀 설정 파일 없음: $PCFG"; exit 1; }
+  [ -d "$DATA_ROOT/pool" ] || { say "!!! DATA_ROOT 에 pool/ 없음 → bash run.sh data 먼저"; exit 1; }
+  { [ "$MODE" = train ] || [ -d "$DATA_ROOT/eval" ]; } || { say "!!! DATA_ROOT 에 eval/ 없음 → bash run.sh data 먼저"; exit 1; }
+fi
 CELLS=${CELLS:-$(python -c "import json;print(' '.join(c['tag'] for c in json.load(open('$ARMS'))['cells']))")}
-say "[grid] 풀 $POOL 조건 $COND 라벨 $LABELS 셀: $CELLS"
+say "[$MODE] 풀 $POOL 조건 $COND 라벨 $LABELS 셀: $CELLS"
+if [ "$MODE" != eval ]; then   # 라벨 커버리지 확인 (평가는 라벨을 쓰지 않으므로 건너뜀)
 CRC=0; python - "$LABELS" "$POOL" > "$OUT_ROOT/coverage_${POOL}.txt" 2>&1 <<'PYC' || CRC=$?
 import sys, glob, pandas as pd; lab, pool = sys.argv[1:3]
 L = pd.read_parquet(lab)[["image_id", "pixel_index"]].drop_duplicates(); need = pd.concat([pd.read_parquet(p) for p in glob.glob(f"pools/{pool}/rows_*.parquet")]).drop_duplicates()
 m = need.merge(L, on=["image_id", "pixel_index"], how="left", indicator=True); miss = int((m._merge == "left_only").sum())
 print(f"[grid] 라벨 커버리지: 필요 {len(need)} px, 부족 {miss} px"); sys.exit(1 if miss else 0)
 PYC
-cat "$OUT_ROOT/coverage_${POOL}.txt" | tee -a "$LOG"; rm -f "$OUT_ROOT/coverage_${POOL}.txt"; [ "$CRC" = 0 ] || { say "!!! [grid] 라벨 부족 → bash run.sh label $POOL 먼저 (all 모드는 자동)"; exit 1; }
+cat "$OUT_ROOT/coverage_${POOL}.txt" | tee -a "$LOG"; rm -f "$OUT_ROOT/coverage_${POOL}.txt"; [ "$CRC" = 0 ] || { say "!!! 라벨 부족 → bash run.sh label $POOL 먼저"; exit 1; }
+fi
 train_cell() { local cell=$1; local ad=$OUT_ROOT/checkpoints/${COND}_${cell}${SUFFIX}
   [ -f "$ad/adapter_model.safetensors" ] && { say "$cell 학습 완료됨 — 건너뜀"; return 0; }
   say "학습 $COND $cell"; python -u experiments/20_train_student.py --cond "$COND" --epochs 2 --accum 8 --focal "$FOCAL" --labels "$LABELS" --pools "$PCFG" --rows "pools/$POOL/rows_$cell.parquet" --tag "_${cell}${SUFFIX}" > "$OUT_ROOT/train_${COND}_${cell}${SUFFIX}.log" 2>&1 || say "!!! 학습 실패 $cell"; }
@@ -232,11 +332,24 @@ eval_cell() { local cell=$1; local ad=$OUT_ROOT/checkpoints/${COND}_${cell}${SUF
 run_cells() { local fn=$1; if [ "$NPROC_TRAIN" -gt 1 ]; then   # GPU 한 장 통째: 셀 NPROC_TRAIN 개를 같은 GPU 에서 동시에 (학습 ≈10 GB, 평가 ≈8 GB)
     local i=0; for cell in $CELLS; do if [ "$NDEV" -gt 1 ]; then CUDA_VISIBLE_DEVICES=${DEVS[$((i % NDEV))]} $fn "$cell" & else $fn "$cell" & fi; i=$((i+1)); [ $((i % NPROC_TRAIN)) -eq 0 ] && wait; done; wait
   else for cell in $CELLS; do $fn "$cell"; done; fi; }
-run_cells train_cell; run_cells eval_cell
+NCELL=$(echo $CELLS | wc -w)
+case $MODE in
+  train) run_cells train_cell
+         say "[train] 완료 $POOL $COND — 셀별 어댑터:"
+         NOK=0; for c in $CELLS; do if [ -f "$OUT_ROOT/checkpoints/${COND}_${c}${SUFFIX}/adapter_model.safetensors" ]; then NOK=$((NOK+1)); say "  $c  OK"; else say "  $c  !!! 실패 → $OUT_ROOT/train_${COND}_${c}${SUFFIX}.log 확인"; fi; done
+         say "[train] $NOK/$NCELL 셀 성공. 어댑터: $OUT_ROOT/checkpoints/${COND}_*${SUFFIX}"
+         say "[train] 다음 작업으로 요청할 것 →  bash run.sh eval $POOL $COND"
+         [ "$NOK" -gt 0 ] || exit 1
+         exit 0;;
+  eval)  NAD=0; for c in $CELLS; do [ -f "$OUT_ROOT/checkpoints/${COND}_${c}${SUFFIX}/adapter_model.safetensors" ] && NAD=$((NAD+1)) || true; done
+         [ "$NAD" -gt 0 ] || { say "!!! [eval] $OUT_ROOT/checkpoints 에 ${COND}_*${SUFFIX} 어댑터가 없다 → bash run.sh train $POOL $COND 먼저"; exit 1; }
+         say "[eval] 학습된 어댑터 $NAD/$NCELL 셀"; run_cells eval_cell;;
+  *)     run_cells train_cell; run_cells eval_cell;;
+esac
 for es in $EVAL_SETS; do python experiments/31_grid.py --cond "$COND" --suffix "$SUFFIX" --eval_set "$es" --arms "$ARMS" >> "$LOG" 2>&1 || say "!!! 표 실패 $es"; done
-say "[grid] 완료 $POOL $COND. 결과: $OUT_ROOT/{eval,tables,figures,checkpoints}"
-for es in $EVAL_SETS; do suf=""; [ "$es" = large ] && suf=_large; echo "===== 요약 $POOL $COND ($es) ====="; head -40 "$OUT_ROOT/tables/table_grid_${COND}${SUFFIX}${suf}.md" 2>/dev/null; done
-python - "$OUT_ROOT" "results_${COND}_${POOL}" "${COND}_" "$SUFFIX" <<'PYS'
+say "[$MODE] 완료 $POOL $COND. 결과: $OUT_ROOT/{eval,tables,figures,checkpoints}"
+for es in $EVAL_SETS; do suf=""; [ "$es" = large ] && suf=_large; echo "===== 요약 $POOL $COND ($es) ====="; head -40 "$OUT_ROOT/tables/table_grid_${COND}${SUFFIX}${suf}.md" 2>/dev/null || echo "  (표 파일 없음: tables/table_grid_${COND}${SUFFIX}${suf}.md — 31_grid.py 로그 확인)"; done
+python - "$OUT_ROOT" "results_${COND}_${POOL}" "${COND}_" "$SUFFIX" <<'PYS' || say "!!! zip 생성 실패 — 결과 파일은 $OUT_ROOT 에 그대로 있다 (여유 공간 확인)"
 import sys, os, zipfile; root, name, cond, suffix = sys.argv[1:5]
 with zipfile.ZipFile(f"{root}/{name}.zip", "w", zipfile.ZIP_DEFLATED) as z:
     for dp, dn, fn in os.walk(root):

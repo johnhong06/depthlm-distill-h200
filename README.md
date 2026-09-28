@@ -29,21 +29,46 @@ Fill the "container creation and code execution request" issue as follows.
 | Extra modules | none needed in the form: `run.sh` installs `requirements.txt` itself when a module is missing |
 | Command and GPU | see below |
 
+Submit one stage per request. Teacher inference, student training and evaluation are separate jobs: each one
+finishes inside a working day, and a failure names the stage that failed instead of ending a 35-hour chain.
+
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
-| 1 smoke | `bash run.sh smoke hf_xxx` | 1 (18 GB slice) | Installs missing packages (and torch if too old), finds the archive parts under `/app/data`, verifies and extracts them once (30 GB, a few minutes), reports which teacher and student weights will be used, downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. Works without a token too (then data and teacher checks are skipped). |
-| 2 full chain | `bash run.sh all hf_xxx` | **7** (whole GPU) | Mixed-pool grids (soft, hard) → teacher labeling of the indoor and driving pools → indoor and driving grids (soft, hard). |
+| 0 check | `bash run.sh check` | smallest slice | Reports, for `/app/data`, `/app/output` and the work root, whether it is writable and how much space is free and used, then where the archive would be extracted and whether anything that is not a result is sitting in `/app/output`. No GPU, no download, under a minute. **Run this first.** |
+| 1 data | `bash run.sh data` | smallest slice | Verifies the sixteen parts against `SHA256SUMS_parts` and extracts them once, in place under `/app/data`. Stops with an explanation if `/app/data` is read-only, because then nothing can be kept for the next job. A few minutes. |
+| 2 smoke | `bash run.sh smoke` | 1 (18 GB slice) | Installs missing packages (and torch if too old), downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. |
+| 3 label | `bash run.sh label <mixed\|indoor\|outdoor> hf_xxx` | **7** (whole GPU) | Teacher inference. The 12B teacher labels only the pixels the repository labels do not already cover, with 4 concurrent processes. Writes `labels/<pool>/teacher_labels.parquet` and `labels_<pool>.zip`. Needs a token only if the teacher weights are not in the archive. |
+| 4 train | `bash run.sh train <pool> <soft\|hard>` | **7** (whole GPU) | Student training, 8 cells concurrently. Reads the teacher labels and the pool images; the teacher weights are not loaded. Writes `checkpoints/`. ~12 h. No token needed. |
+| 5 eval | `bash run.sh eval <pool> <soft\|hard>` | **7** (whole GPU) | Evaluates the 8 adapters on both evaluation sets, then writes tables, figures and the result zip. ~9 h. Reads neither the teacher labels nor the pool images. |
+
+### How the teacher labels reach the training job
+
+Teacher inference is the expensive stage (44,800 pixels per pool from scratch), so its output has to survive until the
+training job runs. It is written to three places and training looks in all three, in this order:
+
+1. `/app/output/labels/<pool>/teacher_labels.parquet`, the result proper (23 MB for a full pool).
+2. `/app/data/labels/<pool>/teacher_labels.parquet`, a copy kept next to the data whenever `/app/data` is writable.
+   This is what makes the split work if `/app/output` is not carried into the next pod.
+3. `pools/<pool>/teacher_labels.parquet` in the repository, which every pod has by definition.
+
+If neither `/app/output` nor `/app/data` survives between jobs, download `labels_<pool>.zip` after the labeling job and
+commit the parquet to `pools/<pool>/teacher_labels.parquet`. The labeling job prints this instruction and the file size.
+`train` refuses to start when it finds no labels and names all three paths it looked in; it also refuses when the labels
+cover fewer pixels than the grid needs, and re-running `label` continues from what is already there instead of
+starting over.
 
 Notes.
 
-- `all` runs each stage as a child process; a failed stage does not stop the next one. Re-submitting the same
-  command resumes: finished cells, evaluations and label shards are skipped. Labeling only produces the pixels that
-  are missing from the repository labels, and a grid refuses to start if any of its pixels lack a label.
-- On a whole GPU the script trains 8 cells and evaluates 8 cells concurrently and labels with 4 teacher
-  processes (≈30 GB each). On an 18 GB slice everything runs sequentially. Override with `NPROC`, `NPROC_LABEL`.
-- Stages can also be submitted one at a time: `bash run.sh grid <mixed|indoor|outdoor> <soft|hard>` and
-  `bash run.sh label <indoor|outdoor>`. A grid uses `pools/<pool>/teacher_labels.parquet` from the repository
-  if present, otherwise `/app/output/labels/<pool>/teacher_labels.parquet` produced by the labeling stage.
+- Re-submitting the same command resumes. A trained cell, a finished evaluation and a completed label shard are all
+  skipped, so a job that was cut short only does the part that is missing. This works as long as `/app/output` is
+  kept; clearing it starts every stage from scratch.
+- `train` refuses to start when a pixel lacks a label and names the pool to label first. `eval` refuses to start when
+  no adapter exists and names the training command.
+- `grid <pool> <cond>` still runs train and eval in one job, and `all` still runs the whole chain. Neither is
+  recommended on a shared pod: the 2026-09 `all` run was terminated after 35 hours and the log did not say how far
+  it had got.
+- On a whole GPU the script trains and evaluates 8 cells concurrently and labels with 4 teacher processes
+  (≈30 GB each). On an 18 GB slice everything runs sequentially. Override with `NPROC`, `NPROC_LABEL`.
 - Stdout is a summary only (the issue report is capped at 65,000 characters); full logs go to `/app/output`.
 
 ### Data and weights (no secrets)
@@ -51,11 +76,27 @@ Notes.
 Everything the jobs need is one 30 GB tar, split into sixteen 2 GB parts (`depthlm_distill_h200_app_data.tar.part_00`
 … `part_15`, plus `SHA256SUMS_parts` and a note), shared with the service administrator through a Google Drive
 folder. The administrator only downloads the files into any folder under `/app/data/`, either as the individual parts or
-as the zip file(s) that Google Drive produces for a folder download; nothing has to be extracted by hand. On the
-first run `run.sh` finds the parts (inside the zips if needed), verifies their checksums, extracts them once, in
-place when that folder is writable and otherwise to `/app/output/data/`, and later jobs reuse the extracted copy.
-An already extracted `depthlm_distill_h200/` folder or raw `models/DepthLM/` weights under `/app/data` are used
-directly if present.
+as the zip file(s) that Google Drive produces for a folder download; nothing has to be extracted by hand. `bash run.sh data`
+finds the parts (inside the zips if needed), verifies their checksums and extracts them once, next to the parts under
+`/app/data`, and every later job reuses that copy. An already extracted `depthlm_distill_h200/` folder or raw
+`models/DepthLM/` weights under `/app/data` are used directly if present.
+
+**Nothing is ever extracted into `/app/output`.** That path is for results only and is the one under the 100 GB
+quota. When `/app/data` turns out to be read-only the script falls back to the container's own temporary disk, which
+disappears with the pod, and says so; ask the administrator for write access on `/app/data` instead. Once the
+extraction has succeeded the sixteen parts (≈29 GB) can be deleted, which the run reports.
+
+Extraction is unavoidable, because both `transformers` and the image loader read files by path, but the full 30 GB is
+not. When the script has to fall back to the temporary disk it extracts only the folders the stage actually reads:
+
+| Stage | Reads | Extracted |
+|---|---|---|
+| `label` | pool images, teacher weights | 29.5 GB |
+| `train` | pool images | 5.5 GB |
+| `eval` | evaluation set | 0.4 GB |
+
+Extracting in place under `/app/data` always unpacks everything once, because that copy is kept and every later stage
+reuses it.
 
 | Path inside the archive | Content |
 |---|---|
@@ -65,11 +106,11 @@ directly if present.
 | `extra_done.txt`, `SHA256SUMS_all`, `README_ADMIN.txt` | marker, checksums of every file, note for the administrator |
 
 The archive contains no secret, so the repository and the request issues stay public and nothing has to be revoked
-afterwards. `run.sh` reads `/app/data` only and writes to `/app/output`. Ground-truth depth is not shipped as
-files; the evaluation pixels and their depth values are in `ref/`.
+afterwards. Ground-truth depth is not shipped as files; the evaluation pixels and their depth values are in `ref/`.
 
 - The student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB) is downloaded from Hugging Face without a token
-  and cached in `/app/output/hf`. A local copy under `models/Qwen2.5-VL-3B-Instruct` is used if present.
+  and cached in `$WORK_ROOT/hf`, which is `/app/data/hf` when that is writable and the container's temporary disk
+  otherwise. A local copy under `models/Qwen2.5-VL-3B-Instruct` is used if present.
 - Fallbacks that need a Hugging Face read token (`hf_…` argument or `/app/data/hf_token.txt`): downloading the image
   packs from the private dataset repo `jh0624/depthlm-distill-data` and the gated teacher from `facebook/DepthLM`.
   Never commit a token.
@@ -86,7 +127,21 @@ files; the evaluation pixels and their depth values are in `ref/`.
 | `results_<cond>_<pool>.zip` | Everything above for one grid, plus logs |
 | `run_*.log`, `train_*.log`, `eval_*.log` | Logs |
 
-Ask the administrator for the six zip files and the two label files when the chain finishes.
+Ask the administrator for the six zip files and the two label files when the last evaluation finishes.
+
+Sizes, so the quota is never the thing that stops a run:
+
+| What | Where | Size |
+|---|---|---|
+| Extracted archive (pool images, evaluation set, teacher weights) | `/app/data`, next to the parts | 30 GB |
+| Archive parts, deletable after extraction | `/app/data` | 29 GB |
+| Student weight cache | `$WORK_ROOT/hf` | 7.5 GB |
+| One grid: 8 LoRA adapters, evaluations, tables, figures, zip | `/app/output` | ≈0.9 GB |
+| All six grids plus labels | `/app/output` | ≈6 GB |
+
+`bash run.sh check` prints the live numbers and flags anything in `/app/output` that is not a result. `NEED_GB`
+(default 32) is the free space the script insists on before it extracts; it refuses early rather than filling the
+volume.
 
 ## Experiments
 

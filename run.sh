@@ -18,9 +18,11 @@ usedgb() { local g; g=$(timeout 60 du -sx -k "$1" 2>/dev/null | tail -1 | awk '{
 have_members() { local root=$1 m; for m in ${2:-pool}; do [ -e "$root/$m" ] || return 1; done; return 0; }   # 부분 해제본이 남아 있을 때 이 단계에 필요한 폴더가 다 있는지
 NEED_GB_EXPLICIT=${NEED_GB:+1}; NEED_GB=${NEED_GB:-32}   # 30 GB 팩을 풀기 전에 요구하는 최소 여유 공간 (GB). 명시하면 단계별 기본값보다 우선한다
 needgb() { local fg; fg=$(freegb "$1"); case $fg in ''|'?') echo "[data] $1 여유 공간 확인 불가 — 계속";; *) [ "$fg" -ge "$2" ] || { echo "!!! [data] $1 여유 ${fg} GB < 필요 $2 GB — 풀 공간이 없다. 관리자에게 여유 공간을 요청할 것"; exit 1; };; esac; }
-EXTRACTED_HERE=0   # 이 작업이 컨테이너 임시 디스크에 데이터를 풀었으면 1 → 끝날 때 지운다 (/app/data 제자리 해제본은 다음 작업이 재사용하므로 남긴다)
-cleanup() { if [ "${H200_CHILD:-0}" = 0 ] && [ "${KEEP_DATA:-0}" = 0 ] && [ "$EXTRACTED_HERE" = 1 ] && [ "${WORK_PERSISTENT:-0}" = 0 ] && [ -n "${XROOT:-}" ]; then
-    rm -rf "$XROOT" && echo "[cleanup] 임시 해제본 삭제 ($XROOT) — /app/output 에는 결과만 남음"; fi; return 0; }
+EXTRACTED_HERE=0   # 이 작업이 $XROOT 에 데이터를 풀었으면 1
+# 해제본은 /app/output 이 아니라 작업 볼륨에 있으므로 지울 이유가 없다. 30 GB 를 rm -rf 하느라 작업 끝에 시간을 쓰지 않는다.
+# 2026-09-28 실측: /app/scratch 는 작업 사이에 유지되지 않으므로 파드가 끝나면 알아서 사라진다. 굳이 지우려면 CLEAN_WORK=1 을 준다
+cleanup() { if [ "${CLEAN_WORK:-0}" = 1 ] && [ "${H200_CHILD:-0}" = 0 ] && [ "$EXTRACTED_HERE" = 1 ] && [ -n "${XROOT:-}" ]; then
+    rm -rf "$XROOT" && echo "[cleanup] 해제본 삭제 ($XROOT)"; fi; return 0; }
 trap cleanup EXIT
 # 위치 인자: bash run.sh <smoke|label|grid|all> [pool] [cond] [hf_token]   (환경변수 MODE/POOL/COND/HF_TOKEN 도 동일하게 동작; 토큰은 /app/data/hf_token.txt 로도 가능)
 # all = 혼합 격자 2개 → 실내·실외 라벨링(라벨이 없을 때만) → 실내·실외 격자 4개를 한 작업으로 이어서 실행
@@ -61,8 +63,8 @@ if [ "$MODE" = check ]; then   # 압축 해제 위치·쓰기 권한·여유 용
   elif [ -n "$PD" ]; then echo "  조각 위치: $PD  ($(ls "$PD"/depthlm_distill_h200_app_data.tar.part_* 2>/dev/null | wc -l)/16 개, 체크섬 $([ -f "$PD/SHA256SUMS_parts" ] && echo 있음 || echo 없음))"
     if writable "$PD"; then echo "  → 제자리 해제 (사본 없음). $PD 에 30 GB 추가, 여유 $(freegb "$PD") GB"
     else echo "  → 조각 폴더가 읽기 전용이므로 $XROOT 에 해제 (30 GB). 여유 $(freegb "$WORK_ROOT") GB"
-         if [ "$WORK_PERSISTENT" = 1 ]; then echo "  판정: 결과 볼륨(/app/output)이 아닌 작업 볼륨이므로 문제 없음. 담당자에게 요청할 것 없음"
-         else echo "  판정: 컨테이너 임시 디스크뿐이다 — 작업마다 다시 풀어야 한다. 담당자에게 /app/data 쓰기 권한이나 작업용 볼륨을 요청할 것"; fi; fi
+         echo "  판정: 결과 볼륨(/app/output)이 아니므로 100 GB 할당량과 무관하다"
+         echo "  참고: 이 볼륨이 작업 사이에 유지되지 않으면 작업마다 다시 푼다 (label 29.5 GB, train 5.5 GB, eval 0.4 GB. 30 GB 기준 약 2 분)"; fi
   else echo "  조각(depthlm_distill_h200_app_data.tar.part_00)을 /app/data 아래에서 찾지 못함"; fi
   echo "DATA_ROOT=$DATA_ROOT"; echo "WORK_ROOT=$WORK_ROOT"; echo "XROOT=$XROOT"; echo "OUT_ROOT=$OUT_ROOT (결과 전용)"; echo "HF_HOME=$HF_HOME"
   echo "=== 교사 라벨 (학생 학습이 읽을 것) ==="
@@ -242,7 +244,8 @@ if [ "$MODE" = data ]; then   # 압축 해제만 하고 끝낸다. 한 번 해 �
     "$XROOT"/*)   # 조각 폴더가 읽기 전용이라 작업 볼륨에 풀었다
       say "[data] $DATA_ROOT 에 남았다 — 작업 볼륨($WORK_ROOT)이고 결과 볼륨(/app/output)과 별개다"
       say "[data] tar 조각은 /app/data 에 그대로 둘 것. 작업 볼륨이 작업 사이에 비워지면 다시 풀어야 한다"
-      say "[data] 다음 작업 전에 bash run.sh check 를 내면 해제본이 남아 있는지 확인된다 ('이미 풀려 있음' 이 나오면 유지되는 환경이다)";;
+      say "[data] 이 작업을 반복할 필요는 없다. 다음 작업으로 bash run.sh check 를 내서 '이미 풀려 있음' 이 나오는지만 보면 된다"
+      say "[data] 나오지 않으면 이 볼륨은 작업마다 비워지는 것이고, label/train/eval 이 각자 필요한 만큼만 스스로 푼다 (data 는 더 낼 필요 없음)";;
     *)            # tar 조각 옆 제자리
       say "[data] $DATA_ROOT 에 tar 조각 옆 제자리로 남았다 — 사본이 없다"
       say "[data] tar 조각(약 29 GB)은 이제 지워도 된다: 관리자에게 depthlm_distill_h200_app_data.tar.part_* 삭제 요청";;
@@ -306,7 +309,8 @@ print(f"[label] {pool} 병합 {len(d)} px / 필요 {len(todo)} px (부족 {miss}
 PYS
   cat "$LD/merge.txt" | tee -a "$LOG"; [ "$MRC" = 0 ] || { say "!!! [label] $POOL 라벨 부족 — 같은 명령을 다시 내면 이어서 라벨링"; exit 1; }
   say "[label] 완료: $LD/teacher_labels.parquet ($(du -h "$LD/teacher_labels.parquet" | cut -f1))"
-  if [ "$WORK_PERSISTENT" = 1 ]; then
+  # /app/data 아래만 작업 사이에 남는다. /app/scratch 는 파드마다 비워지므로 사본을 둬도 다음 작업이 못 본다 (2026-09-28 실측)
+  if case $WORK_ROOT in /app/data*) true;; *) false;; esac; then
     mkdir -p "$WORK_ROOT/labels/$POOL" && cp -f "$LD/teacher_labels.parquet" "$WORK_ROOT/labels/$POOL/teacher_labels.parquet" \
       && say "[label] 영속 사본: $WORK_ROOT/labels/$POOL/teacher_labels.parquet — 다음 파드가 /app/output 을 못 보더라도 학습이 여기서 읽는다" \
       || say "!!! [label] 영속 사본 복사 실패 (학습은 /app/output 경로로 계속 시도한다)"

@@ -35,7 +35,7 @@ finishes inside a working day, and a failure names the stage that failed instead
 | Issue | Command | GPU | What it does |
 |---|---|---|---|
 | 0 check | `bash run.sh check` | smallest slice | Reports, for `/app/data`, `/app/output` and the work root, whether it is writable and how much space is free and used, then where the archive would be extracted and whether anything that is not a result is sitting in `/app/output`. No GPU, no download, under a minute. **Run this first.** |
-| 1 data | `bash run.sh data` | smallest slice | Verifies the sixteen parts against `SHA256SUMS_parts` and extracts them once, in place under `/app/data`. Stops with an explanation if `/app/data` is read-only, because then nothing can be kept for the next job. A few minutes. |
+| 1 data | `bash run.sh data` | smallest slice | One-off check that the sixteen parts verify against `SHA256SUMS_parts` and unpack. It cannot hand the result to a later job on this service, because the work volume is emptied between jobs, so run it once and never again. A few minutes. |
 | 2 smoke | `bash run.sh smoke` | 1 (18 GB slice) | Installs missing packages (and torch if too old), downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. |
 | 3 label | `bash run.sh label <mixed\|indoor\|outdoor> hf_xxx` | **7** (whole GPU) | Teacher inference. The 12B teacher labels only the pixels the repository labels do not already cover, with 4 concurrent processes. Writes `labels/<pool>/teacher_labels.parquet` and `labels_<pool>.zip`. Needs a token only if the teacher weights are not in the archive. |
 | 4 train | `bash run.sh train <pool> <soft\|hard>` | **7** (whole GPU) | Student training, 8 cells concurrently. Reads the teacher labels and the pool images; the teacher weights are not loaded. Writes `checkpoints/`. ~12 h. No token needed. |
@@ -109,8 +109,17 @@ actually reads are extracted:
 | `train` | pool images | 5.5 GB |
 | `eval` | evaluation set | 0.4 GB |
 
-Whether `/app/scratch` survives between jobs is not documented by the service. Run `data` once and then `check`: if
-`check` reports the archive as already extracted, it survives and no later job pays for the extraction again.
+`/app/scratch` does not survive between jobs. Measured on 2026-09-28: one job extracted the archive to
+`/app/scratch/h200_work`, and the next job found nothing there and extracted it again. The repository is also cloned
+into a per-job folder and `peft` has to be installed again every time, so treat every job as starting from an empty
+work volume.
+
+Only `/app/output` carries over. That is where the teacher labels, the adapters and the tables go, and it is the
+volume with 103 GB free, which is why nothing else may be written there.
+
+Unpacking is therefore part of every job, and it is cheap: 30 GB takes about two minutes on this service, so a
+training job spends about twenty seconds on its 5.5 GB and an evaluation job about two seconds on its 0.4 GB. There is
+no point running `data` more than once; it is only useful as a one-off check that the sixteen parts verify and unpack.
 
 | Path inside the archive | Content |
 |---|---|

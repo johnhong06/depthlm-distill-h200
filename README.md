@@ -81,22 +81,36 @@ finds the parts (inside the zips if needed), verifies their checksums and extrac
 `/app/data`, and every later job reuses that copy. An already extracted `depthlm_distill_h200/` folder or raw
 `models/DepthLM/` weights under `/app/data` are used directly if present.
 
-**Nothing is ever extracted into `/app/output`.** That path is for results only and is the one under the 100 GB
-quota. When `/app/data` turns out to be read-only the script falls back to the container's own temporary disk, which
-disappears with the pod, and says so; ask the administrator for write access on `/app/data` instead. Once the
-extraction has succeeded the sixteen parts (≈29 GB) can be deleted, which the run reports.
+**Nothing is ever extracted into `/app/output`.** That path is for results only. The extraction target is chosen in
+this order: next to the parts under `/app/data` when that is writable, so no copy exists at all; then `/app/scratch`,
+the pod's work volume; then the container's temporary disk. A target under `/app/output` is refused even when it is
+passed explicitly.
+
+Measured on the service on 2026-09-28:
+
+| Path | Writable | Free | Used |
+|---|---|---|---|
+| `/app/data` (parts in `/app/data/HJ`) | no | 103 GB | 265 GB |
+| `/app/output` | yes | 103 GB | 0 GB |
+| `/app/scratch` | yes | 950 GB | 0 GB |
+
+`/app/data` and `/app/output` report the same free space, so they share one volume with 103 GB left. That is the volume
+the 2026-09 run filled. `/app/scratch` is a separate and far larger volume, and it is where the pod clones the
+repository and points `HF_HOME`, so that is where the archive goes. No write access on `/app/data` is needed.
 
 Extraction is unavoidable, because both `transformers` and the image loader read files by path, but the full 30 GB is
-not. When the script has to fall back to the temporary disk it extracts only the folders the stage actually reads:
+not always needed. On a volume that survives between jobs the archive is unpacked once in full and every stage reuses
+it. On the container's temporary disk, where each job would otherwise unpack 30 GB again, only the folders the stage
+actually reads are extracted:
 
-| Stage | Reads | Extracted |
+| Stage | Reads | Extracted on a temporary disk |
 |---|---|---|
 | `label` | pool images, teacher weights | 29.5 GB |
 | `train` | pool images | 5.5 GB |
 | `eval` | evaluation set | 0.4 GB |
 
-Extracting in place under `/app/data` always unpacks everything once, because that copy is kept and every later stage
-reuses it.
+Whether `/app/scratch` survives between jobs is not documented by the service. Run `data` once and then `check`: if
+`check` reports the archive as already extracted, it survives and no later job pays for the extraction again.
 
 | Path inside the archive | Content |
 |---|---|

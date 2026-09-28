@@ -14,7 +14,8 @@ set -euo pipefail; cd "$(dirname "$0")"; export PYTHONUNBUFFERED=1
 # 규칙: /app/output 은 결과 전용이다. 압축 해제본·모델 캐시·임시 파일은 절대 여기에 두지 않는다 (2026-09-27 output 100 GB 초과로 실험이 강제 종료된 원인)
 writable() { [ -d "$1" ] || return 1; touch "$1/.h200_write_test" 2>/dev/null || return 1; rm -f "$1/.h200_write_test" 2>/dev/null || true; return 0; }
 freegb() { local g; g=$(df -Pk "$1" 2>/dev/null | awk 'NR==2{printf "%d", int($4/1048576)}') || g=""; echo "${g:-?}"; }
-usedgb() { local g; g=$(du -sk "$1" 2>/dev/null | awk '{printf "%d", int($1/1048576)}') || g=""; echo "${g:-?}"; }
+usedgb() { local g; g=$(timeout 60 du -sx -k "$1" 2>/dev/null | tail -1 | awk '{printf "%d", int($1/1048576)}') || g=""; echo "${g:-?}"; }   # 공유 마운트가 커도 60 초에 끊는다
+have_members() { local root=$1 m; for m in ${2:-pool}; do [ -e "$root/$m" ] || return 1; done; return 0; }   # 부분 해제본이 남아 있을 때 이 단계에 필요한 폴더가 다 있는지
 NEED_GB_EXPLICIT=${NEED_GB:+1}; NEED_GB=${NEED_GB:-32}   # 30 GB 팩을 풀기 전에 요구하는 최소 여유 공간 (GB). 명시하면 단계별 기본값보다 우선한다
 needgb() { local fg; fg=$(freegb "$1"); case $fg in ''|'?') echo "[data] $1 여유 공간 확인 불가 — 계속";; *) [ "$fg" -ge "$2" ] || { echo "!!! [data] $1 여유 ${fg} GB < 필요 $2 GB — 풀 공간이 없다. 관리자에게 여유 공간을 요청할 것"; exit 1; };; esac; }
 EXTRACTED_HERE=0   # 이 작업이 컨테이너 임시 디스크에 데이터를 풀었으면 1 → 끝날 때 지운다 (/app/data 제자리 해제본은 다음 작업이 재사용하므로 남긴다)
@@ -31,11 +32,15 @@ FOCAL=${FOCAL:-750}; EVAL_SETS=${EVAL_SETS:-"small large"}; export HF_HUB_DISABL
 export DATA_ROOT=${DATA_ROOT:-$([ -d /app/data/depthlm_distill_h200 ] && echo /app/data/depthlm_distill_h200 || { [ -d /app/data ] && echo /app/data || echo $PWD/data; })}   # 관리자가 tar 를 푼 폴더 우선
 export OUT_ROOT=${OUT_ROOT:-$([ -d /app/output ] && echo /app/output || echo $PWD/results)}; mkdir -p "$OUT_ROOT"
 DATA_SRC=$DATA_ROOT   # 팩 파일이 놓인 원래 위치 (풀린 뒤 DATA_ROOT 가 바뀌어도 추가 팩은 여기서 찾는다)
-# 압축 해제본·모델 캐시가 갈 곳. 1순위 /app/data (쓰기 가능하면 tar 조각 옆에 제자리 해제 → 사본 0), 2순위 컨테이너 임시 디스크 (파드와 함께 사라짐). /app/output 은 후보가 아니다
-WORK_ROOT=${WORK_ROOT:-$(writable /app/data && echo /app/data || echo "${TMPDIR:-/tmp}/h200_work")}
+# 압축 해제본·모델 캐시가 갈 곳. /app/output 은 후보가 아니다 (결과 전용, /app/data 와 같은 볼륨이라 여유가 적다)
+#   1순위 /app/data — 쓰기 가능하면 tar 조각 옆에 제자리 해제라 사본이 0
+#   2순위 /app/scratch — 사업단 파드의 작업용 볼륨 (2026-09-28 실측: 쓰기 가능, 여유 950 GB). 파드가 여기에 저장소를 clone 하고 HF 캐시도 여기로 지정한다
+#   3순위 컨테이너 임시 디스크
+WORK_ROOT=${WORK_ROOT:-$(writable /app/data && echo /app/data || { writable /app/scratch && echo /app/scratch/h200_work || echo "${TMPDIR:-/tmp}/h200_work"; })}
 case $WORK_ROOT in /app/output*) echo "!!! WORK_ROOT 가 /app/output 을 가리킴 — 결과 전용 경로다. 중단"; exit 1;; esac
 mkdir -p "$WORK_ROOT"; XROOT=$WORK_ROOT/h200_extracted   # 제자리 해제가 불가능할 때만 쓰는 대체 경로
-case $WORK_ROOT in /app/data*) WORK_PERSISTENT=1;; *) WORK_PERSISTENT=0;; esac   # /app/data 아래면 파드가 끝나도 남는다 → 지우지 않고 다음 작업이 재사용
+# 작업 사이에 남을 수 있는 경로면 해제본을 지우지 않는다. /app/data 와 /app/scratch 는 결과 볼륨이 아니고 넉넉하므로 남겨서 다음 작업이 재사용하게 한다
+case $WORK_ROOT in /app/data*|/app/scratch*) WORK_PERSISTENT=1;; *) WORK_PERSISTENT=0;; esac
 # 단계마다 실제로 읽는 것만 푼다 (임시 디스크로 풀 때만 적용. /app/data 제자리 해제는 한 번에 전부 풀어 두고 모든 단계가 재사용한다)
 #   label 교사 추론 = 풀 이미지 + 교사 가중치 | train 학생 학습 = 풀 이미지만 (교사 가중치 불필요) | eval 평가 = 평가셋만 (풀 이미지·교사 가중치 불필요)
 case $MODE in label) NEED_MEMBERS="pool models";; train) NEED_MEMBERS="pool";; eval) NEED_MEMBERS="eval";; grid) NEED_MEMBERS="pool eval";; *) NEED_MEMBERS="";; esac
@@ -52,11 +57,12 @@ if [ "$MODE" = check ]; then   # 압축 해제 위치·쓰기 권한·여유 용
   echo "=== 해제 계획 ==="
   PD=""; for d in /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PD" ] && PD=$(find "$d" -maxdepth 3 -name "depthlm_distill_h200_app_data.tar.part_00" -printf "%h\n" 2>/dev/null | head -1 || true); done
   PX=""; for d in "$XROOT" /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PX" ] && PX=$(find "$d" -maxdepth 4 -type d -name "depthlm_distill_h200" 2>/dev/null | head -1 || true); done
-  if [ -n "$PX" ] && [ -d "$PX/pool" ]; then echo "  이미 풀려 있음: $PX  (풀 이미지 $(find "$PX/pool" -type f | wc -l) 장) → 추가 해제 없음"
+  if [ -n "$PX" ] && [ -d "$PX/pool" ]; then echo "  이미 풀려 있음: $PX  ($(usedgb "$PX") GB, 풀 이미지 $(find "$PX/pool" -type f | wc -l) 장) → 추가 해제 없음. 지난 작업의 해제본이 남아 있다는 뜻이다"
   elif [ -n "$PD" ]; then echo "  조각 위치: $PD  ($(ls "$PD"/depthlm_distill_h200_app_data.tar.part_* 2>/dev/null | wc -l)/16 개, 체크섬 $([ -f "$PD/SHA256SUMS_parts" ] && echo 있음 || echo 없음))"
     if writable "$PD"; then echo "  → 제자리 해제 (사본 없음). $PD 에 30 GB 추가, 여유 $(freegb "$PD") GB"
-    else echo "  → 조각 폴더가 읽기 전용이므로 $XROOT 에 해제. 여유 $(freegb "$WORK_ROOT") GB"
-         echo "  담당자 확인 필요: /app/data 를 쓰기 가능하게 해 주면 30 GB 사본이 아예 생기지 않는다"; fi
+    else echo "  → 조각 폴더가 읽기 전용이므로 $XROOT 에 해제 (30 GB). 여유 $(freegb "$WORK_ROOT") GB"
+         if [ "$WORK_PERSISTENT" = 1 ]; then echo "  판정: 결과 볼륨(/app/output)이 아닌 작업 볼륨이므로 문제 없음. 담당자에게 요청할 것 없음"
+         else echo "  판정: 컨테이너 임시 디스크뿐이다 — 작업마다 다시 풀어야 한다. 담당자에게 /app/data 쓰기 권한이나 작업용 볼륨을 요청할 것"; fi; fi
   else echo "  조각(depthlm_distill_h200_app_data.tar.part_00)을 /app/data 아래에서 찾지 못함"; fi
   echo "DATA_ROOT=$DATA_ROOT"; echo "WORK_ROOT=$WORK_ROOT"; echo "XROOT=$XROOT"; echo "OUT_ROOT=$OUT_ROOT (결과 전용)"; echo "HF_HOME=$HF_HOME"
   echo "=== 교사 라벨 (학생 학습이 읽을 것) ==="
@@ -98,8 +104,9 @@ else say "[setup] HF 토큰 없음 — 학생(공개)은 다운로드 가능. �
 # 관리자 부담 최소화: 드라이브의 조각(depthlm_distill_h200_app_data.tar.part_*)을 /app/data 아래 아무 폴더에 받아 두기만 하면 스크립트가 검증하고 한 번 푼다 (제자리, 불가능하면 $XROOT — /app/output 은 아니다)
 if [ ! -d "$DATA_ROOT/pool" ]; then
   PRE=""; for d in "$XROOT" /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PRE" ] && PRE=$(find "$d" -maxdepth 4 -type d -name "depthlm_distill_h200" 2>/dev/null | head -1 || true); done
-  if [ -n "$PRE" ] && [ -d "$PRE/pool" ]; then export DATA_ROOT=$PRE; echo "[data] 이미 풀린 폴더 사용: $DATA_ROOT"
+  if [ -n "$PRE" ] && have_members "$PRE" "${NEED_MEMBERS:-pool eval}"; then export DATA_ROOT=$PRE; echo "[data] 이미 풀린 폴더 사용: $DATA_ROOT ($(ls "$PRE" | tr '\n' ' '))"
   else
+    { [ -n "$PRE" ] && echo "[data] 부분 해제본 발견: $PRE ($(ls "$PRE" | tr '\n' ' ')) — 이 단계가 필요한 '${NEED_MEMBERS:-pool eval}' 중 빠진 것만 채운다"; } || true
     PDIR=""; for d in /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PDIR" ] && PDIR=$(find "$d" -maxdepth 3 -name "depthlm_distill_h200_app_data.tar.part_00" -printf "%h\n" 2>/dev/null | head -1 || true); done   # set -e/pipefail 안전
     # 관리자가 드라이브 폴더를 통째로 받으면 zip(여러 개일 수 있음, 조각이 나뉘어 들어감)으로 온다 → zip 안의 조각을 순서대로 tar 로 바로 흘려 넣어 풀고(중간 복사본 없음) SHA256 은 흘리면서 검증
     if [ -z "$PDIR" ]; then
@@ -146,17 +153,25 @@ PYZ
       [ "$NP" = 16 ] && [ -f "$PDIR/SHA256SUMS_parts" ] || { echo "!!! [data] 조각 $NP/16 개, 체크섬 파일 $([ -f "$PDIR/SHA256SUMS_parts" ] && echo 있음 || echo 없음) — 아직 업로드 중일 수 있음. 다 올라간 뒤 다시 요청할 것"; exit 1; }
       if writable "$PDIR"; then XDIR=$PDIR; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 쓰기 가능 → 제자리에서 풀기 (사본 없음)"
       else XDIR=$XROOT; echo "[data] 조각 발견: $PDIR (16 개). 폴더가 읽기 전용 → $XROOT 에 풀기 (30 GB). /app/output 에는 풀지 않는다"
-           echo "[data] 담당자에게 /app/data 쓰기 권한을 요청하면 이 사본이 사라진다"; fi
+           { [ "$WORK_PERSISTENT" = 1 ] && echo "[data] 결과 볼륨이 아닌 작업 볼륨이므로 /app/output 용량과 무관하다" || echo "[data] 컨테이너 임시 디스크라 파드가 끝나면 사라진다 — 다음 작업이 다시 푼다"; }; fi
+      if [ -n "$PRE" ] && writable "$(dirname "$PRE")"; then XDIR=$(dirname "$PRE"); echo "[data] 기존 부분 해제본을 채운다: $XDIR/depthlm_distill_h200"; fi
       mkdir -p "$XDIR"; NG=$NEED_GB   # 임시 디스크에 단계별로 부분 해제할 때는 요구 공간도 줄어든다
-      if [ -z "${NEED_GB_EXPLICIT:-}" ] && [ "$XDIR" = "$XROOT" ] && [ "$WORK_PERSISTENT" = 0 ]; then case $MODE in train) NG=8;; eval) NG=2;; esac; fi
+      if [ -z "${NEED_GB_EXPLICIT:-}" ] && [ "$XDIR" = "$XROOT" ]; then case $MODE in train) NG=8;; eval) NG=2;; esac; fi
       needgb "$XDIR" "$NG"
       (cd "$PDIR" && sha256sum -c --quiet SHA256SUMS_parts) && echo "[data] 조각 SHA256 검증 통과" || { echo "!!! [data] 조각 SHA256 불일치 — 업로드가 덜 됐거나 깨짐. 다시 받을 것"; exit 1; }
       TMPX=$XDIR/.extracting_$$; rm -rf "$TMPX"; mkdir -p "$TMPX"   # 임시 폴더에 풀고 성공했을 때만 최종 이름으로 (중간에 죽어도 반쪽짜리 폴더가 남지 않음)
       MEM=""   # 임시 디스크로 푸는 경우에만 이 단계가 읽는 폴더로 한정 (train 5.5 GB, eval 0.4 GB, label 29.5 GB, 전체 30 GB)
-      if [ "$XDIR" = "$XROOT" ] && [ "$WORK_PERSISTENT" = 0 ] && [ -n "$NEED_MEMBERS" ]; then
+      if [ "$XDIR" = "$XROOT" ] && [ -n "$NEED_MEMBERS" ]; then   # data/smoke/all 은 NEED_MEMBERS 가 비어 있어 전체를 푼다
         for m in $NEED_MEMBERS; do MEM="$MEM depthlm_distill_h200/$m"; done
         echo "[data] $MODE 단계가 읽는 것만 풀기:$MEM"; fi
-      if cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$TMPX" $MEM && mv "$TMPX/depthlm_distill_h200" "$XDIR/depthlm_distill_h200"; then
+      merge_in() {   # 대상이 없으면 그대로 옮기고, 부분 해제본이 있으면 빠진 폴더만 채운다
+        if [ -d "$XDIR/depthlm_distill_h200" ]; then
+          for e in "$TMPX/depthlm_distill_h200"/* "$TMPX/depthlm_distill_h200"/.[!.]*; do
+            [ -e "$e" ] || continue; mv -n "$e" "$XDIR/depthlm_distill_h200/" 2>/dev/null || true; done
+          rm -rf "$TMPX"
+        else mv "$TMPX/depthlm_distill_h200" "$XDIR/depthlm_distill_h200" || return 1; fi
+        [ -d "$XDIR/depthlm_distill_h200" ]; }
+      if cat "$PDIR"/depthlm_distill_h200_app_data.tar.part_* | tar -xf - -C "$TMPX" $MEM && merge_in; then
         rm -rf "$TMPX"; export DATA_ROOT=$XDIR/depthlm_distill_h200
         { [ "$XDIR" = "$XROOT" ] && EXTRACTED_HERE=1 || true; }
         # 관리자 팩에는 풀 v4 새 이미지가 이미 들어 있다(extra_done.txt). 부분 해제에는 그 표시 파일이 없으므로 대신 남겨 추가 팩을 다시 덧씌우지 않게 한다
@@ -218,11 +233,18 @@ if [ "$MODE" = data ]; then   # 압축 해제만 하고 끝낸다. 한 번 해 �
   say "[data] 위치: $DATA_ROOT  (여유 $(freegb "$DATA_ROOT") GB)"
   if [ "$WORK_PERSISTENT" = 0 ] && [ "$EXTRACTED_HERE" = 1 ]; then
     say "!!! [data] /app/data 가 읽기 전용이라 컨테이너 임시 디스크($XROOT)에 풀렸다. 파드가 끝나면 사라지므로 이 작업은 아무것도 남기지 못한다"
-    say "!!! [data] 담당자에게 /app/data 쓰기 권한을 요청할 것. 권한이 없으면 data 모드를 건너뛰고 label/train/eval 을 바로 요청하면 된다 (각 작업이 시작할 때 임시 디스크에 스스로 풀고, /app/output 은 건드리지 않는다)"
+    say "!!! [data] 담당자에게 /app/data 쓰기 권한이나 작업용 볼륨(예: /app/scratch)을 요청할 것. 없으면 data 모드를 건너뛰고 label/train/eval 을 바로 요청하면 된다 (각 작업이 시작할 때 임시 디스크에 필요한 만큼만 풀고 /app/output 은 건드리지 않는다)"
     exit 1
   fi
-  say "[data] $DATA_ROOT 에 남았다 (/app/data 아래라 파드가 끝나도 유지) — 다음 작업(label/train/eval)은 다시 풀지 않는다"
-  say "[data] tar 조각(약 29 GB)은 이제 지워도 된다: 관리자에게 depthlm_distill_h200_app_data.tar.part_* 삭제 요청"
+  case $DATA_ROOT in
+    "$XROOT"/*)   # 조각 폴더가 읽기 전용이라 작업 볼륨에 풀었다
+      say "[data] $DATA_ROOT 에 남았다 — 작업 볼륨($WORK_ROOT)이고 결과 볼륨(/app/output)과 별개다"
+      say "[data] tar 조각은 /app/data 에 그대로 둘 것. 작업 볼륨이 작업 사이에 비워지면 다시 풀어야 한다"
+      say "[data] 다음 작업 전에 bash run.sh check 를 내면 해제본이 남아 있는지 확인된다 ('이미 풀려 있음' 이 나오면 유지되는 환경이다)";;
+    *)            # tar 조각 옆 제자리
+      say "[data] $DATA_ROOT 에 tar 조각 옆 제자리로 남았다 — 사본이 없다"
+      say "[data] tar 조각(약 29 GB)은 이제 지워도 된다: 관리자에게 depthlm_distill_h200_app_data.tar.part_* 삭제 요청";;
+  esac
   say "[data] 다음 작업으로 요청할 것 →  bash run.sh label $POOL"; exit 0
 fi
 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | tee -a "$LOG" || say "nvidia-smi 없음"

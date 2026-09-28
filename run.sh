@@ -101,6 +101,8 @@ PYT
     if [ "$MODE" = smoke ]; then say "!!! [setup] 토큰 없이 스모크 계속 (학생 모델은 공개). 새 토큰(만료 없음)으로 다시 요청할 것"
     else say "!!! [setup] 토큰이 무효라 데이터·교사 다운로드가 불가능 → 종료. 새 토큰(만료 없음)으로 다시 요청할 것"; exit 1; fi; fi
 else say "[setup] HF 토큰 없음 — 학생(공개)은 다운로드 가능. 교사는 로컬 가중치(/app/data 조각)가 있으면 토큰 불필요"; fi
+# 스모크는 저장소에 포함된 합성 40장으로만 돌기 때문에 30 GB 팩이 전혀 필요 없다. DATA_ROOT 를 미리 가리켜 아래 데이터 확보 블록을 모두 건너뛴다
+if [ "$MODE" = smoke ]; then export DATA_ROOT=$PWD/smoke/data; echo "[setup] 스모크: 저장소의 합성 데이터만 사용 ($DATA_ROOT) — tar 를 풀지 않는다"; fi
 # 관리자 부담 최소화: 드라이브의 조각(depthlm_distill_h200_app_data.tar.part_*)을 /app/data 아래 아무 폴더에 받아 두기만 하면 스크립트가 검증하고 한 번 푼다 (제자리, 불가능하면 $XROOT — /app/output 은 아니다)
 if [ ! -d "$DATA_ROOT/pool" ]; then
   PRE=""; for d in "$XROOT" /app/data "$DATA_SRC"; do [ -d "$d" ] && [ -z "$PRE" ] && PRE=$(find "$d" -maxdepth 4 -type d -name "depthlm_distill_h200" 2>/dev/null | head -1 || true); done
@@ -210,7 +212,7 @@ if [ ! -d "$DATA_ROOT/pool" ]; then
     fi
   fi
 fi
-if [ -d "$DATA_ROOT/pool" ] && [ ! -f "$DATA_ROOT/.extra_done" ] && [ ! -f "$DATA_ROOT/extra_done.txt" ]; then   # 추가 팩 (실내 v4 새 이미지). 관리자 묶음에는 이미 포함(extra_done.txt)
+if [ "$MODE" != smoke ] && [ -d "$DATA_ROOT/pool" ] && [ ! -f "$DATA_ROOT/.extra_done" ] && [ ! -f "$DATA_ROOT/extra_done.txt" ]; then   # 추가 팩 (실내 v4 새 이미지). 관리자 묶음에는 이미 포함(extra_done.txt)
   EX=""; for d in /app/data "$DATA_SRC" "$DATA_ROOT"; do [ -d "$d" ] && [ -z "$EX" ] && EX=$(find "$d" -maxdepth 3 -name "depthlm_distill_data_extra.tar" -printf "%h\n" 2>/dev/null | head -1 || true); done
   if [ -z "$EX" ] && [ -n "${HF_TOKEN:-}" ]; then mkdir -p "$WORK_ROOT/data_pack"; hf_fetch "$WORK_ROOT/data_pack" "depthlm_distill_data_extra.tar" "SHA256SUMS_extra" >/dev/null 2>&1 || true; [ -f "$WORK_ROOT/data_pack/depthlm_distill_data_extra.tar" ] && EX=$WORK_ROOT/data_pack; fi
   if [ -n "$EX" ] && [ -w "$DATA_ROOT" ]; then
@@ -255,7 +257,6 @@ say "GPU ${GPU_MB} MiB, MIG 장치 $NDEV → 학습 병렬 $NPROC_TRAIN, 라벨�
 if [ "$MODE" = label ] || [ "$MODE" = all ]; then [ "${GPU_MB:-0}" -ge 28000 ] || say "!!! 장치 메모리 ${GPU_MB} MiB < 28 GB — 교사(12B)가 들어가지 않아 라벨링은 실패함. GPU 할당량 7(통째)로 요청할 것"; fi
 python -c "import torch, transformers, peft; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), 'transformers', transformers.__version__, 'peft', peft.__version__)" | tee -a "$LOG"
 if [ "$MODE" = smoke ]; then
-  export DATA_ROOT=$PWD/smoke/data
   say "[smoke] 학습 30 스텝 (Qwen2.5-VL-3B 다운로드 포함)"
   python -u experiments/20_train_student.py --cond soft --steps 30 --accum 8 --focal "$FOCAL" --labels pools/smoke/teacher_labels.parquet --pools configs/pool_smoke.yaml --rows pools/smoke/rows_smoke.parquet --tag _smoke 2>&1 | grep -vE "^\[transformers\]" | tee -a "$LOG"
   say "[smoke] 평가 3 px (데이터셋당 1 이미지 1 픽셀)"

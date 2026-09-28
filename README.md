@@ -176,11 +176,12 @@ volume.
 
 ## Results
 
-Every cell is `δ1 / AbsRel` on the large evaluation set, filled in as each grid finishes, and a dash means the grid has
+Every cell is `δ1 / AbsRel` on the large evaluation set, filled in as each grid finishes, and a dash means that grid has
 not run yet. Take the two numbers from `tables/table_grid_<cond>_<pool>_f750_large.md` inside that grid's result zip.
 
-The last two rows of each table are baselines rather than cells of the design. They do not depend on the pool or on the
-loss, so the same value is repeated in the soft and the hard column and in all three tables.
+`soft` and `hard` are the two distillation losses, compared on identical pixels, labels, seeds and step counts. The last
+two rows of each table are baselines rather than cells of the design. They are single models evaluated once, so they
+carry no loss condition and the same value appears in all three pool tables.
 
 ### Progress
 
@@ -195,55 +196,79 @@ loss, so the same value is repeated in the soft and the hard column and in all t
 
 ### Mixed pool (indoor 50 / driving 50)
 
-| N | k | Budget | iBims-1 soft | iBims-1 hard | NYUv2 soft | NYUv2 hard | ETH3D soft | ETH3D hard |
-|---:|---:|---:|:--|:--|:--|:--|:--|:--|
-| 400 | 1 | 400 | — | — | — | — | — | — |
-| 400 | 4 | 1600 | — | — | — | — | — | — |
-| 400 | 16 | 6400 | — | — | — | — | — | — |
-| 1600 | 1 | 1600 | — | — | — | — | — | — |
-| 1600 | 4 | 6400 | — | — | — | — | — | — |
-| 1600 | 16 | 25600 | — | — | — | — | — | — |
-| 6400 | 1 | 6400 | — | — | — | — | — | — |
-| 6400 | 4 | 25600 | — | — | — | — | — | — |
-| **teacher, DepthLM 12B** | | | 0.811 / 0.141 | 0.811 / 0.141 | 0.889 / 0.122 | 0.889 / 0.122 | 0.649 / 0.205 | 0.649 / 0.205 |
-| **student, no distillation** | | | — | — | — | — | — | — |
+| N | k | Budget | Loss | iBims-1 | NYUv2 | ETH3D |
+|---:|---:|---:|:--|:--|:--|:--|
+| 400 | 1 | 400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 400 | 4 | 1600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 400 | 16 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 1 | 1600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 4 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 16 | 25600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 6400 | 1 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 6400 | 4 | 25600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.649 / 0.205 |
+| **student, no distillation** | | | | — | — | — |
 
 ### Indoor pool
 
-| N | k | Budget | iBims-1 soft | iBims-1 hard | NYUv2 soft | NYUv2 hard | ETH3D soft | ETH3D hard |
-|---:|---:|---:|:--|:--|:--|:--|:--|:--|
-| 400 | 1 | 400 | — | — | — | — | — | — |
-| 400 | 4 | 1600 | — | — | — | — | — | — |
-| 400 | 16 | 6400 | — | — | — | — | — | — |
-| 1600 | 1 | 1600 | — | — | — | — | — | — |
-| 1600 | 4 | 6400 | — | — | — | — | — | — |
-| 1600 | 16 | 25600 | — | — | — | — | — | — |
-| 6400 | 1 | 6400 | — | — | — | — | — | — |
-| 6400 | 4 | 25600 | — | — | — | — | — | — |
-| **teacher, DepthLM 12B** | | | 0.811 / 0.141 | 0.811 / 0.141 | 0.889 / 0.122 | 0.889 / 0.122 | 0.649 / 0.205 | 0.649 / 0.205 |
-| **student, no distillation** | | | — | — | — | — | — | — |
+| N | k | Budget | Loss | iBims-1 | NYUv2 | ETH3D |
+|---:|---:|---:|:--|:--|:--|:--|
+| 400 | 1 | 400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 400 | 4 | 1600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 400 | 16 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 1 | 1600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 4 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 16 | 25600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 6400 | 1 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 6400 | 4 | 25600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.649 / 0.205 |
+| **student, no distillation** | | | | — | — | — |
 
 ### Driving pool
 
-| N | k | Budget | iBims-1 soft | iBims-1 hard | NYUv2 soft | NYUv2 hard | ETH3D soft | ETH3D hard |
-|---:|---:|---:|:--|:--|:--|:--|:--|:--|
-| 400 | 1 | 400 | — | — | — | — | — | — |
-| 400 | 4 | 1600 | — | — | — | — | — | — |
-| 400 | 16 | 6400 | — | — | — | — | — | — |
-| 1600 | 1 | 1600 | — | — | — | — | — | — |
-| 1600 | 4 | 6400 | — | — | — | — | — | — |
-| 1600 | 16 | 25600 | — | — | — | — | — | — |
-| 6400 | 1 | 6400 | — | — | — | — | — | — |
-| 6400 | 4 | 25600 | — | — | — | — | — | — |
-| **teacher, DepthLM 12B** | | | 0.811 / 0.141 | 0.811 / 0.141 | 0.889 / 0.122 | 0.889 / 0.122 | 0.649 / 0.205 | 0.649 / 0.205 |
-| **student, no distillation** | | | — | — | — | — | — | — |
+| N | k | Budget | Loss | iBims-1 | NYUv2 | ETH3D |
+|---:|---:|---:|:--|:--|:--|:--|
+| 400 | 1 | 400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 400 | 4 | 1600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 400 | 16 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 1 | 1600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 4 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 1600 | 16 | 25600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 6400 | 1 | 6400 | soft | — | — | — |
+| | | | hard | — | — | — |
+| 6400 | 4 | 25600 | soft | — | — | — |
+| | | | hard | — | — | — |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.649 / 0.205 |
+| **student, no distillation** | | | | — | — | — |
 
 ### Baselines
 
-The teacher row is `facebook/DepthLM` (12B) on exactly the pixels the students are scored on, with the same δ1 and
-AbsRel definitions and the same image-cluster bootstrap, so it is directly comparable. Its midpoint correction is
-+0.005 because the teacher answers with two decimals, while a student answers with one and gets +0.05. Numbers come
-from `ref/dist_<dataset>.parquet`, which was produced when the evaluation pixels were curated.
+The teacher is `facebook/DepthLM` (12B) scored on exactly the pixels the students are scored on, with the same δ1 and
+AbsRel definitions and the same image-cluster bootstrap as `31_grid.py`, so it is directly comparable. Its midpoint
+correction is +0.005 because the teacher answers with two decimals, while a student answers with one and gets +0.05.
+The numbers come from `ref/dist_<dataset>.parquet`, produced when the evaluation pixels were curated.
 
 | Baseline | iBims-1 | NYUv2 | ETH3D |
 |---|:--|:--|:--|
@@ -252,13 +277,14 @@ from `ref/dist_<dataset>.parquet`, which was produced when the evaluation pixels
 | Student before distillation, Qwen2.5-VL-3B | — | — | — |
 
 95% image-cluster bootstrap intervals for the teacher on the large set: iBims-1 [0.763, 0.856], NYUv2 [0.866, 0.911],
-ETH3D [0.618, 0.678].
+ETH3D [0.618, 0.678]. ETH3D is the lowest of the three for the teacher as well, so it bounds what a student can reach
+on the held-out set.
 
-The zero-shot student row needs one evaluation run with no adapter, which `21_eval_student.py` does when `--adapter`
-is left empty. It is the baseline that says how much the distillation added.
+The zero-shot student row needs one evaluation run with no adapter, which `21_eval_student.py` does when `--adapter` is
+left empty. It is the baseline that says how much the distillation added.
 
-Per-cell confidence intervals, the paired fixed-budget comparisons and the small-set tables are not repeated here.
-They are in `tables/table_grid_<cond>_<pool>_f750[_large].md` inside each `results_<cond>_<pool>.zip`.
+Per-cell confidence intervals, the paired fixed-budget comparisons and the small-set tables are not repeated here. They
+are in `tables/table_grid_<cond>_<pool>_f750[_large].md` inside each `results_<cond>_<pool>.zip`.
 
 ## Experiments
 

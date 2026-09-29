@@ -157,7 +157,9 @@ left empty. It is the baseline that says how much the distillation added.
 
 ## Running on Aerodrone H200
 
-Fill the "container creation and code execution request" issue as follows.
+A Korean step-by-step guide to the service itself (application, request form, what the container keeps, data
+delivery, pitfalls met so far) is in [docs/h200_guide_ko.md](docs/h200_guide_ko.md). Fill the "container creation and
+code execution request" issue as follows.
 
 | Field | Value |
 |---|---|

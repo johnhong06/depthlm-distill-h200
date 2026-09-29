@@ -39,6 +39,8 @@ DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Q
 
 ## H200 실행
 
+서비스 자체의 사용법(신청, 요청서, 컨테이너 경로, 데이터 전달, 겪은 문제)은 [H200 사용법](h200_guide_ko.md)에 정리했다.
+
 이슈 양식: 사용자 ID `johnhong06`, 저장소 `https://github.com/johnhong06/depthlm-distill-h200.git`, 이미지 `pytorch/pytorch:latest`(torch 가 오래되면 run.sh 가 시작할 때 2.11 로 바꾼다), 언어 `Python`, 추가 모듈 없음(run.sh 가 설치).
 
 | 명령 | GPU | 하는 일 |

@@ -1,0 +1,6 @@
+dataset: nuscenes
+jsonl: $DATA_ROOT/eval/nuscenes/nuscenes_val.jsonl
+image_folder: $DATA_ROOT/eval/nuscenes
+pixels_per_image: 10
+model_path: facebook/DepthLM
+max_new_tokens: 128

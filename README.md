@@ -344,35 +344,35 @@ batch 1 × accumulation 8, 2 epochs, seed fixed. Evaluation: the large set of ea
 |---|---|---|---|---|---|
 | Indoor | NYUv2 | indoor and mixed pools | 200 / 2,000 | same dataset, rooms excluded from the pools (pool v4) | Kinect |
 | Indoor | iBims-1 | indoor and mixed pools | 100 / 3,000 | not in any pool | laser scan |
-| Driving | KITTI-HO | fallback, used only if nuScenes cannot be built | 200 / 2,000 | same sensor and city; drives no pool uses, with every place that appears in a pool removed | accumulated LiDAR (KITTI annotated depth) |
-| Driving | DDAD | driving and mixed pools | 250 / 2,500 | different vehicle and countries, not in any pool; DepthLM's own benchmark | LiDAR |
-| Driving | nuScenes | driving and mixed pools | in preparation | DepthLM's own benchmark split (last 5 % of trainval samples), not in any pool | LiDAR |
-| Mixed | ETH3D | not evaluated since 2026-09-29 (no pool is judged on it) | 454 / 4,503 | not in any pool | laser scan |
+| Driving | DDAD | driving and mixed pools | 250 / 2,500 | different vehicle and countries, daytime; not in any pool | LiDAR |
+| Driving | nuScenes | driving and mixed pools | 250 / 2,500 | DepthLM's evaluation split: 43 scenes of one evening in Singapore, all at night, 13 in rain; not in any pool | LiDAR |
 
 Ground truth is the Euclidean distance from the camera centre to the point, the quantity the prompt asks for, in every
-set. DepthLM's own DDAD, nuScenes and Waymo scripts use z-depth instead, so KITTI-HO and DDAD also store z-depth, used
-only to compare the teacher with the DDAD value in the DepthLM paper (δ1 0.670).
+set. DepthLM's DDAD and nuScenes scripts use z-depth instead, so both driving sets also store z-depth, used only to
+compare the teacher with the paper (DDAD δ1 0.670, nuScenes 0.819). ETH3D is no longer evaluated, since no pool is
+judged on it.
 
-DDAD and nuScenes are also in DepthLM's result tables, next to Qwen2.5-VL-3B without training, DepthLM-3B (the same backbone trained on 16M ground-truth images) and pure vision models, so these two columns are the ones that can be set beside published numbers. If nuScenes can be built, it replaces KITTI-HO, which is not in any published table.
+DDAD and nuScenes are both in DepthLM's result tables, next to Qwen2.5-VL-3B without training, DepthLM-3B (the same
+backbone trained on 16M ground-truth images) and pure vision models, so the driving columns can be set beside published
+numbers. Both sets follow DepthLM's own curation scripts and subsample them to 250 images with 10 pixels each (seed 0),
+keeping a 10-pixel border free so that the marker can be drawn. Our numbers therefore estimate the same quantity as the
+paper's on other random pixels.
 
-DDAD (`experiments/41_build_ddad.py`) follows DepthLM's `curate_ddad.py`: the 50 validation scenes, all six cameras, LiDAR projected into the image with the nearest point kept per pixel, and pixels drawn at random from those with depth. DepthLM uses every sample and 100 pixels per image; here five (sample, camera) pairs per scene are drawn (seed 0), 250 images, with 10 pixels per image away from a 10-pixel border. The procedure does not mask the ego vehicle, and the five non-front cameras see part of it: of the 120 sampled pixels in the lower quarter of those cameras, roughly half lie on the hood or on body panels reflecting the scene (visual check), and they carry the depth of the ground behind the car. This is inherited from the official procedure, so the DDAD column keeps these pixels to stay comparable with the published numbers, and a sensitivity value without the lower quarter of the non-front cameras is reported beside it.
+DDAD (`experiments/41_build_ddad.py`) follows `curate_ddad.py`: the 50 validation scenes, all six cameras, LiDAR
+projected into the image with the nearest point kept per pixel, and pixels drawn at random from those with depth;
+DepthLM uses every sample and 100 pixels per image, here five (sample, camera) pairs are drawn per scene. The procedure
+does not mask the ego vehicle, and the five non-front cameras see part of it: of the 120 sampled pixels in the lower
+quarter of those cameras, roughly half lie on the hood or on body panels reflecting the scene (visual check), and they
+carry the depth of the ground behind the car. The DDAD column keeps these pixels to stay comparable with the published
+numbers, and a sensitivity value without the lower quarter of the non-front cameras is reported beside it.
 
-KITTI-HO (`experiments/40_build_kitti_heldout.py`) is held out by place, not only by drive number, because two kinds of
-overlap survive a drive-level split:
-
-- The campus drives (`2011_09_28`) film the same place under different drive numbers. A first draft that took one image
-  from each of 50 unused campus drives had 19 of the 50 match a pool image (32×32 grey-level correlation > 0.9), so all
-  81 unused campus drives are dropped.
-- KITTI 2012 images, which the pools contain, were cut from raw drives, but KITTI 2012 publishes no drive mapping. Every
-  fifth frame of each remaining drive is therefore compared with every KITTI image in the pools (dHash distance ≤ 10,
-  then correlation > 0.9), and the 50 frames (5 s) on either side of a match are removed.
-
-What remains are the 12 city, residential and road drives that no pool uses and that are not the source of a KITTI 2015
-training image. 200 images are taken evenly spaced over them, at most one per second of drive (seed 0), with 10 pixels
-per image where 0 < z ≤ 80 m, away from a 10-pixel border. `experiments/42_leak_check.py` repeats the comparison on the
-finished set as an independent check. On the finished set it finds 232 pairs within dHash distance 6 and none above correlation
-0.9 (highest 0.78, a different place on inspection). With only 12 drives, intervals on KITTI-HO are also reported with
-the drive rather than the image as the bootstrap cluster.
+nuScenes (`experiments/43_build_nuscenes.py`) follows `curate_nuscenes_eval.py`: the last 5 % of the trainval sample list
+(1,708 samples, the only nuScenes scenes the teacher was not trained on) with all six cameras, the top LiDAR projected with
+the sensor calibrations only (no ego-pose correction, as in DepthLM), the nearest point per pixel, and pixels drawn at
+random from those with depth; here 250 of the 10,248 (sample, camera) pairs are drawn. Because the sample list is ordered
+by scene, this split is 43 consecutive scenes recorded on one evening, all at night and 13 in rain, so the nuScenes
+column measures night-time driving. As in the official procedure, points closer than 1 m are not removed: three of the
+2,500 pixels carry depths of 0.1 to 0.2 m from returns off the ego vehicle.
 
 Measured on an RTX PRO 4500: 0.46 s per training step, ≈10 GB VRAM per cell; teacher labeling 0.8–1.0 s per pixel,
 ≈30 GB VRAM. H200 timings are to be measured.

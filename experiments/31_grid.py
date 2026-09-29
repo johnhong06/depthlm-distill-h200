@@ -7,7 +7,7 @@
 import argparse, json, os
 import numpy as np, pandas as pd
 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); NAMES = {"ibims1": "iBims-1", "nyuv2": "NYUv2", "ddad": "DDAD", "nuscenes": "nuScenes", "eth3d": "ETH3D (held-out)", "kitti_ho": "KITTI-HO"}
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); NAMES = {"ibims1": "iBims-1", "nyuv2": "NYUv2", "ddad": "DDAD", "nuscenes": "nuScenes", "eth3d": "ETH3D (held-out)"}
 ap = argparse.ArgumentParser(); ap.add_argument("--cond", default="soft"); ap.add_argument("--eval_set", default="small", choices=["small", "large"]); ap.add_argument("--suffix", default="", help="태그 접미사 (예: _f500)"); ap.add_argument("--arms", default="pools/mixed/arms.json"); ap.add_argument("--datasets", default=",".join(NAMES), help="쉼표 구분, 표에 넣을 평가 세트 (있는 것만)"); args = ap.parse_args()
 NAMES = {k: v for k, v in NAMES.items() if k in args.datasets.split(",")}
 OUT = os.environ.get("OUT_ROOT", "results")

@@ -22,8 +22,8 @@ DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Q
 | 혼합 | hard | 로컬 | v5 | 2,544 px 추가 중(로컬) | 대기 | 로컬 |
 | 실내 | soft | H200 | v4 = v5 | 커밋됨 | 진행 중 | H200 |
 | 실내 | hard | H200 | v4 = v5 | 커밋됨 | 다음 | H200 |
-| 실외 | soft | H200 | v5 | 5,640 px 추가 중(로컬), **아직 요청 금지** | 라벨 커밋 후 | 로컬(어댑터로) |
-| 실외 | hard | H200 | v5 | 5,640 px 추가 중(로컬), **아직 요청 금지** | | 로컬(어댑터로) |
+| 실외 | soft | H200 | v5 | 커밋됨 (5,640 px 로컬 추가) | 실내 hard 다음 | 로컬(어댑터로) |
+| 실외 | hard | H200 | v5 | 커밋됨 (5,640 px 로컬 추가) | | 로컬(어댑터로) |
 
 순서. H200 은 GPU 한 장으로 한 번에 하나: `grid indoor soft`(진행 중) → `grid indoor hard` → `grid outdoor soft` → `grid outdoor hard`. 작업이 끝날 때마다 관리자에게 `results_<cond>_<pool>.zip` 을 받고 `checkpoints/` 가 들어 있는지 확인한다. 로컬은 실외·혼합 새 교사 라벨 → DDAD·nuScenes 교사 기준선 → 풀 v5 로 `grid mixed soft`·`grid mixed hard` → H200 zip 의 실외 어댑터를 DDAD·nuScenes 로 평가, 학습 전 학생을 네 세트로 평가.
 

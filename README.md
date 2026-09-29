@@ -27,8 +27,8 @@ The decision rule was fixed before any grid finished and is stated under [Result
 | mixed | hard | local | v5 | 2,544 px being added (local) | queued | local |
 | indoor | soft | H200 | v4 = v5 | committed | running | on H200 |
 | indoor | hard | H200 | v4 = v5 | committed | next | on H200 |
-| outdoor | soft | H200 | v5 | 5,640 px being added (local), **do not submit yet** | after the labels are committed | local, from the adapters |
-| outdoor | hard | H200 | v5 | 5,640 px being added (local), **do not submit yet** | | local, from the adapters |
+| outdoor | soft | H200 | v5 | committed (5,640 px added locally) | after indoor hard | local, from the adapters |
+| outdoor | hard | H200 | v5 | committed (5,640 px added locally) | | local, from the adapters |
 
 Order of work. On H200, one job at a time on a whole GPU: `grid indoor soft` (running) → `grid indoor hard` →
 `grid outdoor soft` → `grid outdoor hard`; after each job, ask the administrator for its `results_<cond>_<pool>.zip`,

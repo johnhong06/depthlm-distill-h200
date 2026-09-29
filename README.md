@@ -176,8 +176,9 @@ volume.
 
 ## Results
 
-Every cell is `δ1 / AbsRel` on the large evaluation set, filled in as each grid finishes, and a dash means that grid has
-not run yet. Take the two numbers from `tables/table_grid_<cond>_<pool>_f750_large.md` inside that grid's result zip.
+Every cell is `δ1 / AbsRel` on the large evaluation set, filled in as each cell's evaluation finishes, and a dash means
+that cell has not been evaluated yet. The two numbers come from the cell's log line in `eval_<cond>_<cell>_<pool>_f750_large.log`,
+which computes them exactly as `tables/table_grid_<cond>_<pool>_f750_large.md` does; the table adds the confidence intervals.
 
 `soft` and `hard` are the two distillation losses, compared on identical pixels, labels, seeds and step counts. The last
 two rows of each table are baselines rather than cells of the design. They are single models evaluated once, so they
@@ -187,7 +188,7 @@ carry no loss condition and the same value appears in all three pool tables.
 
 | Pool | Condition | Machine | Teacher labels | Training | Evaluation | Result file |
 |---|---|---|---|---|---|---|
-| mixed | soft | local | committed | | | |
+| mixed | soft | local | committed | done | 1/8 (large only) | |
 | mixed | hard | local | committed | | | |
 | indoor | soft | H200 | committed | | | |
 | indoor | hard | H200 | committed | | | |
@@ -198,7 +199,7 @@ carry no loss condition and the same value appears in all three pool tables.
 
 | N | k | Budget | Loss | iBims-1 | NYUv2 | ETH3D |
 |---:|---:|---:|:--|:--|:--|:--|
-| 400 | 1 | 400 | soft | — | — | — |
+| 400 | 1 | 400 | soft | 0.376 / 0.361 | 0.412 / 0.309 | 0.288 / 0.698 |
 | | | | hard | — | — | — |
 | 400 | 4 | 1600 | soft | — | — | — |
 | | | | hard | — | — | — |

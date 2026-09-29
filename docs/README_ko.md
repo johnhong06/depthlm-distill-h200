@@ -66,7 +66,7 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 
 ## 결과 표
 
-격자 여섯 개의 결과 표와 교사 기준선은 영문 README 의 [Results](../README.md#results) 절에 있다. 셀마다 `δ1 / AbsRel` 이고 격자가 끝날 때마다 채운다. 숫자는 그 격자의 결과 zip 안 `tables/table_grid_<cond>_<pool>_f750_large.md` 에서 가져온다. 표를 한 곳에서만 관리하려고 여기에 옮겨 적지 않는다.
+격자 여섯 개의 결과 표와 교사 기준선은 영문 README 의 [Results](../README.md#results) 절에 있다. 셀마다 `δ1 / AbsRel` 이고 셀 평가가 끝날 때마다 채운다. 숫자는 셀별 로그 `eval_<cond>_<cell>_<pool>_f750_large.log` 에서 가져오며, `tables/table_grid_<cond>_<pool>_f750_large.md` 와 같은 방식으로 계산된다(표에는 신뢰구간이 더해진다). 표를 한 곳에서만 관리하려고 여기에 옮겨 적지 않는다.
 
 교사(DepthLM 12B) 기준선은 이미 채워져 있다. 학생이 채점되는 것과 똑같은 픽셀에, 똑같은 δ1·AbsRel 정의와 똑같은 이미지 군집 부트스트랩으로 쟀다. 중간값 보정만 다르다. 교사는 소수 두 자리로 답하니 +0.005, 학생은 한 자리라 +0.05 다.
 

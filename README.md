@@ -180,89 +180,95 @@ Every cell is `δ1 / AbsRel` on the large evaluation set, filled in as each cell
 that cell has not been evaluated yet. The two numbers come from the cell's log line in `eval_<cond>_<cell>_<pool>_f750_large.log`,
 which computes them exactly as `tables/table_grid_<cond>_<pool>_f750_large.md` does; the table adds the confidence intervals.
 
+Each pool is judged on the evaluation sets of its own domain: the indoor pool on iBims-1 and NYUv2, the driving pool on
+KITTI-HO and DDAD, and the mixed pool on all four. The other domain's columns are reported as transfer and are not used to
+decide between cells. ETH3D (indoor and non-driving outdoor scenes) is reported for every pool as a reference. KITTI-HO
+and DDAD were added on 2026-09-29 and are evaluated locally from the adapters in each result zip, so their columns fill
+in later than the others. See [Evaluation sets](#evaluation-sets).
+
 `soft` and `hard` are the two distillation losses, compared on identical pixels, labels, seeds and step counts. The last
 two rows of each table are baselines rather than cells of the design. They are single models evaluated once, so they
 carry no loss condition and the same value appears in all three pool tables.
 
 ### Progress
 
-| Pool | Condition | Machine | Teacher labels | Training | Evaluation | Result file |
-|---|---|---|---|---|---|---|
-| mixed | soft | local | committed | done | 3/8 (large only) | |
-| mixed | hard | local | committed | | | |
-| indoor | soft | H200 | committed | | | |
-| indoor | hard | H200 | committed | | | |
-| outdoor | soft | H200 | committed | | | |
-| outdoor | hard | H200 | committed | | | |
+| Pool | Condition | Machine | Teacher labels | Training | Evaluation | Driving sets | Result file |
+|---|---|---|---|---|---|---|---|
+| mixed | soft | local | committed | done | 4/8 (large only) | pending | |
+| mixed | hard | local | committed | | | pending | |
+| indoor | soft | H200 | committed | | | pending | |
+| indoor | hard | H200 | committed | | | pending | |
+| outdoor | soft | H200 | committed | | | pending | |
+| outdoor | hard | H200 | committed | | | pending | |
 
 ### Mixed pool (indoor 50 / driving 50)
 
-| N | k | Budget | Loss | iBims-1 | NYUv2 | ETH3D |
-|---:|---:|---:|:--|:--|:--|:--|
-| 400 | 1 | 400 | soft | 0.376 / 0.361 | 0.412 / 0.309 | 0.288 / 0.698 |
-| | | | hard | — | — | — |
-| 400 | 4 | 1600 | soft | 0.325 / 0.349 | 0.362 / 0.313 | 0.294 / 0.683 |
-| | | | hard | — | — | — |
-| 400 | 16 | 6400 | soft | 0.384 / 0.352 | 0.441 / 0.306 | 0.311 / 0.599 |
-| | | | hard | — | — | — |
-| 1600 | 1 | 1600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 1600 | 4 | 6400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 1600 | 16 | 25600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 6400 | 1 | 6400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 6400 | 4 | 25600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.649 / 0.205 |
-| **student, no distillation** | | | | — | — | — |
+| N | k | Budget | Loss | iBims-1 | NYUv2 | KITTI-HO | DDAD | ETH3D |
+|---:|---:|---:|:--|:--|:--|:--|:--|:--|
+| 400 | 1 | 400 | soft | 0.376 / 0.361 | 0.412 / 0.309 | — | — | 0.288 / 0.698 |
+| | | | hard | — | — | — | — | — |
+| 400 | 4 | 1600 | soft | 0.325 / 0.349 | 0.362 / 0.313 | — | — | 0.294 / 0.683 |
+| | | | hard | — | — | — | — | — |
+| 400 | 16 | 6400 | soft | 0.384 / 0.352 | 0.441 / 0.306 | — | — | 0.311 / 0.599 |
+| | | | hard | — | — | — | — | — |
+| 1600 | 1 | 1600 | soft | 0.352 / 0.350 | 0.431 / 0.307 | — | — | 0.315 / 0.586 |
+| | | | hard | — | — | — | — | — |
+| 1600 | 4 | 6400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 1600 | 16 | 25600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 6400 | 1 | 6400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 6400 | 4 | 25600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | — | — | 0.649 / 0.205 |
+| **student, no distillation** | | | | — | — | — | — | — |
 
 ### Indoor pool
 
-| N | k | Budget | Loss | iBims-1 | NYUv2 | ETH3D |
-|---:|---:|---:|:--|:--|:--|:--|
-| 400 | 1 | 400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 400 | 4 | 1600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 400 | 16 | 6400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 1600 | 1 | 1600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 1600 | 4 | 6400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 1600 | 16 | 25600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 6400 | 1 | 6400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 6400 | 4 | 25600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.649 / 0.205 |
-| **student, no distillation** | | | | — | — | — |
+| N | k | Budget | Loss | iBims-1 | NYUv2 | KITTI-HO | DDAD | ETH3D |
+|---:|---:|---:|:--|:--|:--|:--|:--|:--|
+| 400 | 1 | 400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 400 | 4 | 1600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 400 | 16 | 6400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 1600 | 1 | 1600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 1600 | 4 | 6400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 1600 | 16 | 25600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 6400 | 1 | 6400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 6400 | 4 | 25600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | — | — | 0.649 / 0.205 |
+| **student, no distillation** | | | | — | — | — | — | — |
 
 ### Driving pool
 
-| N | k | Budget | Loss | iBims-1 | NYUv2 | ETH3D |
-|---:|---:|---:|:--|:--|:--|:--|
-| 400 | 1 | 400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 400 | 4 | 1600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 400 | 16 | 6400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 1600 | 1 | 1600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 1600 | 4 | 6400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 1600 | 16 | 25600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 6400 | 1 | 6400 | soft | — | — | — |
-| | | | hard | — | — | — |
-| 6400 | 4 | 25600 | soft | — | — | — |
-| | | | hard | — | — | — |
-| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.649 / 0.205 |
-| **student, no distillation** | | | | — | — | — |
+| N | k | Budget | Loss | iBims-1 | NYUv2 | KITTI-HO | DDAD | ETH3D |
+|---:|---:|---:|:--|:--|:--|:--|:--|:--|
+| 400 | 1 | 400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 400 | 4 | 1600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 400 | 16 | 6400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 1600 | 1 | 1600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 1600 | 4 | 6400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 1600 | 16 | 25600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 6400 | 1 | 6400 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| 6400 | 4 | 25600 | soft | — | — | — | — | — |
+| | | | hard | — | — | — | — | — |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | — | — | 0.649 / 0.205 |
+| **student, no distillation** | | | | — | — | — | — | — |
 
 ### Baselines
 
@@ -271,11 +277,11 @@ AbsRel definitions and the same image-cluster bootstrap as `31_grid.py`, so it i
 correction is +0.005 because the teacher answers with two decimals, while a student answers with one and gets +0.05.
 The numbers come from `ref/dist_<dataset>.parquet`, produced when the evaluation pixels were curated.
 
-| Baseline | iBims-1 | NYUv2 | ETH3D |
-|---|:--|:--|:--|
-| Teacher, DepthLM 12B, large set | 0.811 / 0.141 | 0.889 / 0.122 | 0.649 / 0.205 |
-| Teacher, DepthLM 12B, small set | 0.793 / 0.156 | 0.875 / 0.124 | 0.657 / 0.183 |
-| Student before distillation, Qwen2.5-VL-3B | — | — | — |
+| Baseline | iBims-1 | NYUv2 | KITTI-HO | DDAD | ETH3D |
+|---|:--|:--|:--|:--|:--|
+| Teacher, DepthLM 12B, large set | 0.811 / 0.141 | 0.889 / 0.122 | — | — | 0.649 / 0.205 |
+| Teacher, DepthLM 12B, small set | 0.793 / 0.156 | 0.875 / 0.124 | n/a | n/a | 0.657 / 0.183 |
+| Student before distillation, Qwen2.5-VL-3B | — | — | — | — | — |
 
 95% image-cluster bootstrap intervals for the teacher on the large set: iBims-1 [0.763, 0.856], NYUv2 [0.866, 0.911],
 ETH3D [0.618, 0.678]. ETH3D is the lowest of the three for the teacher as well, so it bounds what a student can reach
@@ -295,6 +301,14 @@ are in `tables/table_grid_<cond>_<pool>_f750[_large].md` inside each `results_<c
 | `indoor` | 6,400 / 5,674 | SUN RGB-D, NYUv2 | produced on the service |
 | `outdoor` | 6,400 / 509 | KITTI (scene count saturates at 509; upper N cells add frames of the same drives, reported as a limitation) | produced on the service |
 
+The driving pool's 509 scenes overstate the number of distinct places. The scene count treats each KITTI 2012 and KITTI
+2015 image as its own scene, but these images were cut from raw drives, and 249 of the 788 in the outdoor pool (165 of
+KITTI 2015, 84 of KITTI 2012) show the same place as a raw or depth-selection frame that is also in the pool (dHash
+distance ≤ 10, correlation > 0.9); in the mixed pool it is 176 of 788. The campus drives add more repetition, since
+they film one place under several drive numbers. This does not leak into any evaluation set, but it means the image
+axis N adds fewer new places in the driving pool than the scene count suggests, and it is reported as a limitation
+when N and k are compared there.
+
 Pool v4 (2026-09-23): NYUv2 has ~3 images per room, so the 200 NYUv2 evaluation images' 195 rooms are excluded
 from the pools at the scene level (146 mixed-pool and 333 indoor-pool images replaced in place by the next unused
 indoor candidates of the same deterministic order; see `pools/*/pool_v4_report.md`). No evaluation image or scene of
@@ -304,6 +318,37 @@ Grid cells: `N400_k1 N400_k4 N400_k16 N1600_k1 N1600_k4 N1600_k16 N6400_k1 N6400
 pixel indices 0..k−1 shared). Student: Qwen2.5-VL-3B-Instruct + LoRA r16 α32 on q/k/v/o, AdamW 1e-4 cosine,
 batch 1 × accumulation 8, 2 epochs, seed fixed. Evaluation: `small` = 300 / 320 / 302 pixels
 (iBims-1 / NYUv2 / ETH3D), `large` = 3,000 / 2,000 / 4,503 pixels. Metric: δ1 (max(p/g, g/p) < 1.25).
+
+### Evaluation sets
+
+| Domain | Set | Role | Images / pixels | Relation to the pools | Ground truth |
+|---|---|---|---|---|---|
+| Indoor | NYUv2 | near | 200 / 2,000 | same dataset, rooms excluded from the pools (pool v4) | Kinect |
+| Indoor | iBims-1 | far | 100 / 3,000 | not in any pool | laser scan |
+| Driving | KITTI-HO | near | 200 / 2,000 | same sensor and city; drives no pool uses, with every place that appears in a pool removed | accumulated LiDAR (KITTI annotated depth) |
+| Driving | DDAD | far | 250 / 2,500 (in preparation) | different vehicle and countries, not in any pool | LiDAR |
+| Mixed | ETH3D | reference | 454 / 4,503 | not in any pool | laser scan |
+
+Ground truth is the Euclidean distance from the camera centre to the point, the quantity the prompt asks for, in every
+set. DepthLM's own DDAD, nuScenes and Waymo scripts use z-depth instead, so KITTI-HO and DDAD also store z-depth, used
+only to compare the teacher with the DDAD value in the DepthLM paper (δ1 0.670).
+
+KITTI-HO (`experiments/40_build_kitti_heldout.py`) is held out by place, not only by drive number, because two kinds of
+overlap survive a drive-level split:
+
+- The campus drives (`2011_09_28`) film the same place under different drive numbers. A first draft that took one image
+  from each of 50 unused campus drives had 19 of the 50 match a pool image (32×32 grey-level correlation > 0.9), so all
+  81 unused campus drives are dropped.
+- KITTI 2012 images, which the pools contain, were cut from raw drives, but KITTI 2012 publishes no drive mapping. Every
+  fifth frame of each remaining drive is therefore compared with every KITTI image in the pools (dHash distance ≤ 10,
+  then correlation > 0.9), and the 50 frames (5 s) on either side of a match are removed.
+
+What remains are the 12 city, residential and road drives that no pool uses and that are not the source of a KITTI 2015
+training image. 200 images are taken evenly spaced over them, at most one per second of drive (seed 0), with 10 pixels
+per image where 0 < z ≤ 80 m, away from a 10-pixel border. `experiments/42_leak_check.py` repeats the comparison on the
+finished set as an independent check. On the finished set it finds 232 pairs within dHash distance 6 and none above correlation
+0.9 (highest 0.78, a different place on inspection). With only 12 drives, intervals on KITTI-HO are also reported with
+the drive rather than the image as the bootstrap cluster.
 
 Measured on an RTX PRO 4500: 0.46 s per training step, ≈10 GB VRAM per cell; teacher labeling 0.8–1.0 s per pixel,
 ≈30 GB VRAM. H200 timings are to be measured.

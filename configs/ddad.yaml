@@ -1,0 +1,6 @@
+dataset: ddad
+jsonl: $DATA_ROOT/eval/ddad/ddad_val.jsonl
+image_folder: $DATA_ROOT/eval/ddad
+pixels_per_image: 10
+model_path: facebook/DepthLM
+max_new_tokens: 128

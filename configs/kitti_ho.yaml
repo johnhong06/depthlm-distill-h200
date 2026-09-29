@@ -1,0 +1,6 @@
+dataset: kitti_ho
+jsonl: $DATA_ROOT/eval/kitti_ho/kitti_ho_val.jsonl
+image_folder: $DATA_ROOT/eval/kitti_ho
+pixels_per_image: 10
+model_path: facebook/DepthLM
+max_new_tokens: 128

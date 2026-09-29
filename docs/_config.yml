@@ -1,4 +1,10 @@
-title: depthlm-distill-h200
-description: DepthLM 증류 실험과 Aerodrone H200 사용법
-lang: ko
-theme: jekyll-theme-cayman
+title: Aerodrone H200
+description: 항공드론혁신융합대학 H200 GPU 서버에 깃허브 이슈로 실험을 올리고 결과를 받는 방법
+baseurl: /depthlm-distill-h200
+repository: johnhong06/depthlm-distill-h200
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+exclude:
+  - README_ko.md

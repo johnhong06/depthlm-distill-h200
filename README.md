@@ -1,220 +1,62 @@
 # depthlm-distill-h200
 
-Distilling the metric depth ability of DepthLM (Pixtral-12B) into a Qwen2.5-VL-3B student with LoRA,
-packaged to run unattended on the Aerodrone H200 service (GitHub issue → Jenkins → container).
+Distilling the metric depth ability of DepthLM (Pixtral-12B) into a Qwen2.5-VL-3B student with LoRA, using only the
+teacher's answers as labels, packaged to run unattended on the Aerodrone H200 service (GitHub issue → Jenkins →
+container). Korean version: [docs/README_ko.md](docs/README_ko.md).
 
-Two questions are studied on three image pools (indoor, driving, mixed 50/50):
+## Study at a glance
 
-1. **Query-budget allocation.** With the number of teacher queries fixed, is it better to label many images
-   with few pixels each or few images with many pixels each? Grid: images N ∈ {400, 1600, 6400} ×
-   pixels per image k ∈ {1, 4, 16}, N·k ≤ 25,600 (8 nested cells).
-2. **Training signal.** Cross-entropy on the teacher's single answer (`hard`) versus KL to the teacher's
-   digit distribution (`soft`).
-
-Everything else is held fixed: pixel lists, teacher labels, steps, initialization, shuffle seed,
-label format (one decimal), input focal length 750 and midpoint decoding. ETH3D is fully held out.
-
-Korean version of this page: [docs/README_ko.md](docs/README_ko.md).
-
-## Running on Aerodrone H200
-
-Fill the "container creation and code execution request" issue as follows.
-
-| Field | Value |
+| | |
 |---|---|
-| Username | `johnhong06` |
-| GitHub link | `https://github.com/johnhong06/depthlm-distill-h200.git` |
-| Image | `pytorch/pytorch:latest` (the only PyTorch option in the form). If it is the Docker Hub image (torch 2.2.1), `run.sh` replaces torch with 2.11 (cu128) at start-up, ~5 min; if it already has torch ≥ 2.5 nothing is replaced |
-| Language | `Python` |
-| Extra modules | none needed in the form: `run.sh` installs `requirements.txt` itself when a module is missing |
-| Command and GPU | see below |
+| Question 1: allocation | With the number of teacher queries fixed, is it better to label many images with few pixels each or few images with many pixels each? |
+| Question 2: training signal | Cross-entropy on the teacher's single answer (`hard`) or KL to the teacher's digit distribution (`soft`)? |
+| Grid | images N ∈ {400, 1600, 6400} × pixels per image k ∈ {1, 4, 16}, N·k ≤ 25,600: 8 nested cells per pool and loss |
+| Pools | indoor (SUN RGB-D, NYUv2), driving (KITTI), mixed (50/50), 6,400 images each → 3 pools × 2 losses = 6 grids |
+| Labels | DepthLM 12B answers on the pool pixels; ground truth is never used for training |
+| Evaluation | each pool on its own domain only: indoor → iBims-1, NYUv2; driving → DDAD, nuScenes; mixed → all four |
+| Held fixed | pixel lists, teacher labels, steps, initialization, shuffle seed, label format (one decimal), input focal length 750, midpoint decoding |
 
-Submit one stage per request. On a service whose result volume survives between jobs, teacher inference, student
-training and evaluation can each be their own job. On the 2026-09 service they do not, so teacher inference is one job
-and training plus evaluation is a single `grid` job of about 21 hours.
+Cells that share a budget N·k are compared on the same evaluation pixels, and so are `soft` and `hard` in the same cell.
+The decision rule was fixed before any grid finished and is stated under [Results](#results).
 
-| Issue | Command | GPU | What it does |
-|---|---|---|---|
-| 0 check | `bash run.sh check` | smallest slice | Reports, for `/app/data`, `/app/output` and the work root, whether it is writable and how much space is free and used, then where the archive would be extracted and whether anything that is not a result is sitting in `/app/output`. No GPU, no download, under a minute. **Run this first.** |
-| 1 data | `bash run.sh data` | smallest slice | One-off check that the sixteen parts verify against `SHA256SUMS_parts` and unpack. It cannot hand the result to a later job on this service, because the work volume is emptied between jobs, so run it once and never again. A few minutes. |
-| 2 smoke | `bash run.sh smoke` | 1 (18 GB slice) | Installs missing packages (and torch if too old), downloads the student, trains 30 steps on the bundled synthetic 40-image pool, evaluates 3 pixels. ~20 min. |
-| 3 label | `bash run.sh label <mixed\|indoor\|outdoor> hf_xxx` | **7** (whole GPU) | Teacher inference. The 12B teacher labels only the pixels the repository labels do not already cover, with 4 concurrent processes. Writes `labels/<pool>/teacher_labels.parquet` and `labels_<pool>.zip`. Needs a token only if the teacher weights are not in the archive. |
-| 4 train | `bash run.sh train <pool> <soft\|hard>` | **7** (whole GPU) | Student training, 8 cells concurrently. Reads the teacher labels and the pool images; the teacher weights are not loaded. Writes `checkpoints/`. ~12 h. No token needed. |
-| 5 eval | `bash run.sh eval <pool> <soft\|hard>` | **7** (whole GPU) | Evaluates the 8 adapters on the pool's own evaluation sets (large set only), then writes tables, figures and the result zip. Only iBims-1 and NYUv2 are in the archive, so this is the indoor pool's evaluation; for the outdoor pool it skips evaluation and only packs the adapters, which are evaluated locally on DDAD and nuScenes. Reads neither the teacher labels nor the pool images. |
+## Status
 
-### How the teacher labels reach the training job
+| Pool | Loss | Machine | Pool version | Teacher labels | Training | Evaluation |
+|---|---|---|---|---|---|---|
+| mixed | soft | local | v5 | 2,544 px being added (local) | queued (retraining on v5) | local |
+| mixed | hard | local | v5 | 2,544 px being added (local) | queued | local |
+| indoor | soft | H200 | v4 = v5 | committed | running | on H200 |
+| indoor | hard | H200 | v4 = v5 | committed | next | on H200 |
+| outdoor | soft | H200 | v5 | 5,640 px being added (local), **do not submit yet** | after the labels are committed | local, from the adapters |
+| outdoor | hard | H200 | v5 | 5,640 px being added (local), **do not submit yet** | | local, from the adapters |
 
-Teacher inference is the expensive stage (44,800 pixels per pool from scratch), so its output has to survive until the
-training job runs. It is written to three places and training looks in all three, in this order:
+Order of work. On H200, one job at a time on a whole GPU: `grid indoor soft` (running) → `grid indoor hard` →
+`grid outdoor soft` → `grid outdoor hard`; after each job, ask the administrator for its `results_<cond>_<pool>.zip`,
+which must contain `checkpoints/`. Locally: the new outdoor and mixed teacher labels, then the DDAD and nuScenes teacher
+baselines, then `grid mixed soft` and `grid mixed hard` on pool v5, then DDAD and nuScenes for the outdoor adapters from
+the H200 zips and the zero-shot student on all four sets.
 
-1. `/app/output/labels/<pool>/teacher_labels.parquet`, the result proper (23 MB for a full pool).
-2. `/app/data/labels/<pool>/teacher_labels.parquet`, a copy kept next to the data whenever `/app/data` is writable.
-   This is what makes the split work if `/app/output` is not carried into the next pod.
-3. `pools/<pool>/teacher_labels.parquet` in the repository, which every pod has by definition.
-
-If neither `/app/output` nor `/app/data` survives between jobs, download `labels_<pool>.zip` after the labeling job and
-commit the parquet to `pools/<pool>/teacher_labels.parquet`. The labeling job prints this instruction and the file size.
-`train` refuses to start when it finds no labels and names all three paths it looked in; it also refuses when the labels
-cover fewer pixels than the grid needs, and re-running `label` continues from what is already there instead of
-starting over.
-
-Notes.
-
-- Re-submitting the same command resumes. A trained cell, a finished evaluation and a completed label shard are all
-  skipped, so a job that was cut short only does the part that is missing. This works as long as `/app/output` is
-  kept; clearing it starts every stage from scratch.
-- `train` refuses to start when a pixel lacks a label and names the pool to label first. `eval` refuses to start when
-  no adapter exists and names the training command.
-- Evaluation covers only the pool's own sets (`EVAL_DATASETS`, default indoor → `ibims1 nyuv2`, outdoor → `ddad nuscenes`,
-  mixed → all four) and only the large set (`EVAL_SETS=large`; the small set is a subset of it and is read out of it).
-  A set that is not under `$DATA_ROOT/eval` is skipped with a message, and the result zip still carries the adapters.
-- `grid <pool> <cond>` still runs train and eval in one job, and `all` still runs the whole chain. Neither is
-  recommended on a shared pod: the 2026-09 `all` run was terminated after 35 hours and the log did not say how far
-  it had got.
-- On a whole GPU the script trains and evaluates 8 cells concurrently and labels with 4 teacher processes
-  (≈30 GB each). On an 18 GB slice everything runs sequentially. Override with `NPROC`, `NPROC_LABEL`.
-- Stdout is a summary only (the issue report is capped at 65,000 characters); full logs go to `/app/output`.
-
-### Data and weights (no secrets)
-
-Everything the jobs need is one 30 GB tar, split into sixteen 2 GB parts (`depthlm_distill_h200_app_data.tar.part_00`
-… `part_15`, plus `SHA256SUMS_parts` and a note), shared with the service administrator through a Google Drive
-folder. The administrator only downloads the files into any folder under `/app/data/`, either as the individual parts or
-as the zip file(s) that Google Drive produces for a folder download; nothing has to be extracted by hand. `bash run.sh data`
-finds the parts (inside the zips if needed), verifies their checksums and extracts them once, next to the parts under
-`/app/data`, and every later job reuses that copy. An already extracted `depthlm_distill_h200/` folder or raw
-`models/DepthLM/` weights under `/app/data` are used directly if present.
-
-**Nothing is ever extracted into `/app/output`.** That path is for results only. The extraction target is chosen in
-this order: next to the parts under `/app/data` when that is writable, so no copy exists at all; then `/app/scratch`,
-the pod's work volume; then the container's temporary disk. A target under `/app/output` is refused even when it is
-passed explicitly.
-
-Measured on the service on 2026-09-28:
-
-| Path | Writable | Free | Used |
-|---|---|---|---|
-| `/app/data` (parts in `/app/data/HJ`) | no | 103 GB | 265 GB |
-| `/app/output` | yes | 103 GB | 0 GB |
-| `/app/scratch` | yes | 950 GB | 0 GB |
-
-`/app/data` and `/app/output` report the same free space, so they share one volume with 103 GB left. That is the volume
-the 2026-09 run filled. `/app/scratch` is a separate and far larger volume, and it is where the pod clones the
-repository and points `HF_HOME`, so that is where the archive goes. No write access on `/app/data` is needed.
-
-Extraction is unavoidable, because both `transformers` and the image loader read files by path, but the full 30 GB is
-not always needed. On a volume that survives between jobs the archive is unpacked once in full and every stage reuses
-it. On the container's temporary disk, where each job would otherwise unpack 30 GB again, only the folders the stage
-actually reads are extracted:
-
-| Stage | Reads | Extracted on a temporary disk |
-|---|---|---|
-| `label` | pool images, teacher weights | 29.5 GB |
-| `train` | pool images | 5.5 GB |
-| `eval` | evaluation set | 0.4 GB |
-
-`/app/scratch` does not survive between jobs. Measured on 2026-09-28: one job extracted the archive to
-`/app/scratch/h200_work`, and the next job found nothing there and extracted it again. The repository is also cloned
-into a per-job folder and `peft` has to be installed again every time, so treat every job as starting from an empty
-work volume.
-
-`/app/output` does not carry over either. Measured on 2026-09-28: one job wrote the indoor teacher labels there, and
-an hour later the next job saw `/app/output` empty, holding only its own report file. Each job gets a fresh result
-volume, and the administrator retrieves that job's files afterwards.
-
-**Nothing produced by one job is visible to the next.** The repository is the only durable channel, so the teacher
-labels have to be committed to `pools/<pool>/teacher_labels.parquet` after every labeling job, and training and
-evaluation have to run inside one job. Use `grid <pool> <cond>`, not `train` followed by `eval`. The split into
-separate `train` and `eval` jobs only works where the result volume survives between jobs, for example on a local
-machine.
-
-Unpacking is therefore part of every job, and it is cheap: 30 GB takes about two minutes on this service, so a
-training job spends about twenty seconds on its 5.5 GB and an evaluation job about two seconds on its 0.4 GB. There is
-no point running `data` more than once; it is only useful as a one-off check that the sixteen parts verify and unpack.
-
-| Path inside the archive | Content |
-|---|---|
-| `pool/` | 13,285 training images (SUN RGB-D, KITTI, NYUv2), pool v4 |
-| `eval/` | 757 evaluation images and lists (iBims-1, NYUv2, ETH3D) |
-| `models/DepthLM/` + `models/DepthLM_MODEL_LICENSE.txt` | teacher weights (24 GB) with a copy of the FAIR Noncommercial Research License, as its section 1.b.ii requires when the weights are handed to a third party |
-| `extra_done.txt`, `SHA256SUMS_all`, `README_ADMIN.txt` | marker, checksums of every file, note for the administrator |
-
-The archive contains no secret, so the repository and the request issues stay public and nothing has to be revoked
-afterwards. Ground-truth depth is not shipped as files; the evaluation pixels and their depth values are in `ref/`.
-
-- The student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB) is downloaded from Hugging Face without a token
-  and cached in `$WORK_ROOT/hf`, which is `/app/data/hf` when that is writable and the container's temporary disk
-  otherwise. A local copy under `models/Qwen2.5-VL-3B-Instruct` is used if present.
-- Fallbacks that need a Hugging Face read token (`hf_…` argument or `/app/data/hf_token.txt`): downloading the image
-  packs from the private dataset repo `jh0624/depthlm-distill-data` and the gated teacher from `facebook/DepthLM`.
-  Never commit a token.
-
-### Outputs (`/app/output`)
-
-| Path | Content |
-|---|---|
-| `checkpoints/<cond>_<cell>_<pool>_f750/` | LoRA adapter (`adapter_model.safetensors`), `train.log` |
-| `eval/eval_<cond>_<cell>_<pool>_f750[_large].parquet` | Per-pixel prediction, ground truth, uncertainty |
-| `tables/table_grid_<cond>_<pool>_f750[_large].md` | δ1 with 95% image-cluster bootstrap CI per cell; row, column and equal-budget paired comparisons |
-| `figures/fig_grid_<cond>_<pool>_f750[_large].png` | δ1 versus budget |
-| `labels/<pool>/teacher_labels.parquet` | Teacher pseudo-labels produced on the service |
-| `results_<cond>_<pool>.zip` | Everything above for one grid, plus logs |
-| `run_*.log`, `train_*.log`, `eval_*.log` | Logs |
-
-Ask the administrator for the six zip files and the two label files when the last evaluation finishes.
-
-Sizes, so the quota is never the thing that stops a run:
-
-| What | Where | Size |
-|---|---|---|
-| Extracted archive (pool images, evaluation set, teacher weights) | `/app/data`, next to the parts | 30 GB |
-| Archive parts, deletable after extraction | `/app/data` | 29 GB |
-| Student weight cache | `$WORK_ROOT/hf` | 7.5 GB |
-| One grid: 8 LoRA adapters, evaluations, tables, figures, zip | `/app/output` | ≈0.9 GB |
-| All six grids plus labels | `/app/output` | ≈6 GB |
-
-`bash run.sh check` prints the live numbers and flags anything in `/app/output` that is not a result. `NEED_GB`
-(default 32) is the free space the script insists on before it extracts; it refuses early rather than filling the
-volume.
+Pool v5 moves near-duplicate images to the end of the image order ([Pools](#pools)). The indoor pool has none, so its v4
+and v5 are the same. A first mixed soft grid trained on v4, before the rule existed, is kept locally as a pilot and not
+reported. The H200 archive has no driving sets, so the outdoor grids only train there.
 
 ## Results
 
 Every cell is `δ1 / AbsRel` on the large evaluation set, filled in as each cell's evaluation finishes; a dash means the
 cell has not been evaluated yet. The numbers come from each cell's evaluation log and are computed exactly as in
 `tables/table_grid_<cond>_<pool>_f750_large.md`, which adds the confidence intervals and the paired comparisons.
-
-Each pool is evaluated only on the sets of its own domain: the indoor pool on iBims-1 and NYUv2, the driving pool on
-DDAD and nuScenes, and the mixed pool on all four ([Evaluation sets](#evaluation-sets)). Cross-domain scores are not
-computed, since they would measure the domain gap rather than the allocation or the loss.
+Cross-domain scores are not computed, since they would measure the domain gap rather than the allocation or the loss.
 
 **Decision rule (fixed on 2026-09-29, before any grid finished).** Every comparison, whether equal-budget cells or
-soft against hard in the same cell, is a paired difference in δ1 on the same pixels with a 95 % image-cluster bootstrap
-interval, computed separately on each of the pool's sets. A result is claimed when all of the pool's sets point the same
-way and every interval excludes zero. The same direction with only some intervals excluding zero is reported as weak
-evidence, and opposite directions as set-dependent, with no claim. For the mixed pool the rule is applied to the two
-indoor sets and to the two driving sets, and a claim for the pool needs both domains to agree. Negative results are
-reported as well.
+soft against hard in the same cell, is a paired difference in δ1 on the same pixels with a 95 % bootstrap interval,
+computed separately on each of the pool's sets. A result is claimed when all of the pool's sets point the same way and
+every interval excludes zero. The same direction with only some intervals excluding zero is reported as weak evidence,
+and opposite directions as set-dependent, with no claim. For the mixed pool the rule is applied to the two indoor sets
+and to the two driving sets, and a claim for the pool needs both domains to agree. Negative results are reported as well.
 
-`soft` and `hard` are the two distillation losses, compared on identical pixels, labels, seeds and step counts. The last
-two rows of each table are baselines rather than cells of the design; they are single models evaluated once, so they
-carry no loss condition.
-
-### Progress
-
-| Pool | Condition | Machine | Pool | Teacher labels | Training | Evaluation |
-|---|---|---|---|---|---|---|
-| mixed | soft | local | v5 | 2,544 px being added | queued (retraining on v5) | local |
-| mixed | hard | local | v5 | 2,544 px being added | queued | local |
-| indoor | soft | H200 | v4 = v5 | committed | running | on H200 |
-| indoor | hard | H200 | v4 = v5 | committed | | on H200 |
-| outdoor | soft | H200 | v5 | 5,640 px being added, **do not submit yet** | | local, from the adapters |
-| outdoor | hard | H200 | v5 | 5,640 px being added, **do not submit yet** | | local, from the adapters |
-
-Pool v5 moves near-duplicate images to the end of the image order ([Experiments](#experiments)). The indoor pool has no
-near-duplicates, so its v4 and v5 are the same. The first mixed soft grid was trained on v4, before the rule existed; it
-is kept locally as a pilot and not reported, and both mixed grids are retrained on v5 so that they match the driving
-pool. The H200 archive has no driving sets, so the outdoor grids only train there, and their adapters, which are in each
-result zip, are evaluated locally.
+The equal-budget comparisons are N400_k4 vs N1600_k1 at 1,600 queries; N400_k16, N1600_k4 and N6400_k1 at 6,400; and
+N1600_k16 vs N6400_k4 at 25,600. The last two rows of each table are baselines rather than cells of the design; they are
+single models evaluated once, so they carry no loss condition.
 
 ### Mixed pool (indoor 50 / driving 50)
 
@@ -309,13 +151,173 @@ ETH3D, which is no longer evaluated here, the same pipeline reproduced the paper
 The zero-shot student row needs one evaluation run with no adapter, which `21_eval_student.py` does when `--adapter` is
 left empty. It is the baseline that says how much the distillation added.
 
+## Running on Aerodrone H200
+
+Fill the "container creation and code execution request" issue as follows.
+
+| Field | Value |
+|---|---|
+| Username | `johnhong06` |
+| GitHub link | `https://github.com/johnhong06/depthlm-distill-h200.git` |
+| Image | `pytorch/pytorch:latest` (the only PyTorch option in the form). If it is the Docker Hub image (torch 2.2.1), `run.sh` replaces torch with 2.11 (cu128) at start-up, ~5 min; if it already has torch ≥ 2.5 nothing is replaced |
+| Language | `Python` |
+| Extra modules | none needed in the form: `run.sh` installs `requirements.txt` itself when a module is missing |
+| Command and GPU | see below |
+
+| Command | GPU | What it does |
+|---|---|---|
+| `bash run.sh check` | smallest slice | Reports, for `/app/data`, `/app/output` and the work root, whether it is writable and how much space is free, and where the archive would be extracted. No GPU, under a minute. |
+| `bash run.sh smoke` | 1 (18 GB slice) | Trains 30 steps on the bundled synthetic 40-image pool and evaluates 3 pixels. ~20 min. |
+| `bash run.sh label <pool>` | **7** (whole GPU) | Teacher inference for the pixels the committed labels do not cover yet, 4 teacher processes. Writes `labels_<pool>.zip`, whose parquet has to be committed to `pools/<pool>/teacher_labels.parquet`. |
+| `bash run.sh grid <pool> <soft\|hard>` | **7** (whole GPU) | Trains the 8 cells concurrently, evaluates them on the pool's own sets that are in the archive (iBims-1 and NYUv2; the driving sets are not, so an outdoor grid only trains), then writes tables, figures and `results_<cond>_<pool>.zip` with the adapters. Training ~12 h, to be measured. |
+
+What the service does and does not keep decides how the jobs are split:
+
+- **Nothing produced by one job is visible to the next** (measured on 2026-09-28: `/app/output`, `/app/scratch` and the
+  work volume all start empty). The repository is the only durable channel, so teacher labels are committed to
+  `pools/<pool>/teacher_labels.parquet`, and training and evaluation run inside one `grid` job. Separate `train` and
+  `eval` jobs only work where the result volume persists, such as a local machine.
+- `grid` looks for labels in `/app/output/labels/<pool>/`, then `/app/data/labels/<pool>/` (when `/app/data` is
+  writable), then `pools/<pool>/` in the repository, and refuses to train when they do not cover every pixel of the
+  grid, naming the pool to label.
+- Re-submitting a command resumes: a trained cell, a finished evaluation or a completed label shard is skipped, as long
+  as `/app/output` is kept.
+- Evaluation covers only the pool's own sets (`EVAL_DATASETS`: indoor → `ibims1 nyuv2`, outdoor → `ddad nuscenes`, mixed
+  → all four) and only the large set (`EVAL_SETS=large`; the small set is a subset of it and is read out of it). A set
+  that is not under `$DATA_ROOT/eval` is skipped with a message, and the zip still carries the adapters.
+- Stdout is a summary only (the issue report is capped at 65,000 characters); full logs go to `/app/output`.
+
+### Outputs (`/app/output`)
+
+| Path | Content |
+|---|---|
+| `checkpoints/<cond>_<cell>_<pool>_f750/` | LoRA adapter (`adapter_model.safetensors`), `train.log` |
+| `eval/eval_<cond>_<cell>_<pool>_f750_large__<set>.parquet` | Per-pixel prediction, ground truth, uncertainty (older runs: one file per cell without `__<set>`) |
+| `tables/table_grid_<cond>_<pool>_f750_large.md` | δ1 with 95 % bootstrap interval per cell; row, column and equal-budget paired comparisons |
+| `figures/fig_grid_<cond>_<pool>_f750_large.png` | δ1 versus budget |
+| `results_<cond>_<pool>.zip` | Everything above for one grid, plus logs |
+| `run_*.log`, `train_*.log`, `eval_*.log` | Logs |
+
+After each grid job, ask the administrator for that job's `results_<cond>_<pool>.zip`, and check that it contains
+`checkpoints/`: the outdoor adapters are evaluated locally, and any set added later is evaluated from these files.
+
+<details>
+<summary>Data archive, storage and sizes on the service</summary>
+
+### Data and weights (no secrets)
+
+Everything the jobs need is one 30 GB tar, split into sixteen 2 GB parts (`depthlm_distill_h200_app_data.tar.part_00`
+… `part_15`, plus `SHA256SUMS_parts` and a note), shared with the service administrator through a Google Drive
+folder. The administrator only downloads the files into any folder under `/app/data/`, either as the individual parts or
+as the zip file(s) that Google Drive produces for a folder download; nothing has to be extracted by hand. `bash run.sh data`
+finds the parts (inside the zips if needed), verifies their checksums and extracts them once, next to the parts under
+`/app/data`, and every later job reuses that copy. An already extracted `depthlm_distill_h200/` folder or raw
+`models/DepthLM/` weights under `/app/data` are used directly if present.
+
+**Nothing is ever extracted into `/app/output`.** That path is for results only. The extraction target is chosen in
+this order: next to the parts under `/app/data` when that is writable, so no copy exists at all; then `/app/scratch`,
+the pod's work volume; then the container's temporary disk. A target under `/app/output` is refused even when it is
+passed explicitly.
+
+Measured on the service on 2026-09-28:
+
+| Path | Writable | Free | Used |
+|---|---|---|---|
+| `/app/data` (parts in `/app/data/HJ`) | no | 103 GB | 265 GB |
+| `/app/output` | yes | 103 GB | 0 GB |
+| `/app/scratch` | yes | 950 GB | 0 GB |
+
+`/app/data` and `/app/output` report the same free space, so they share one volume with 103 GB left. That is the volume
+the 2026-09 run filled. `/app/scratch` is a separate and far larger volume, and it is where the pod clones the
+repository and points `HF_HOME`, so that is where the archive goes. No write access on `/app/data` is needed.
+
+Extraction is unavoidable, because both `transformers` and the image loader read files by path, but the full 30 GB is
+not always needed. On a volume that survives between jobs the archive is unpacked once in full and every stage reuses
+it. On the container's temporary disk, where each job would otherwise unpack 30 GB again, only the folders the stage
+actually reads are extracted:
+
+| Stage | Reads | Extracted on a temporary disk |
+|---|---|---|
+| `label` | pool images, teacher weights | 29.5 GB |
+| `train` | pool images | 5.5 GB |
+| `eval` | evaluation set | 0.4 GB |
+
+`/app/scratch` does not survive between jobs. Measured on 2026-09-28: one job extracted the archive to
+`/app/scratch/h200_work`, and the next job found nothing there and extracted it again. The repository is also cloned
+into a per-job folder and `peft` has to be installed again every time, so treat every job as starting from an empty
+work volume.
+
+`/app/output` does not carry over either. Measured on 2026-09-28: one job wrote the indoor teacher labels there, and
+an hour later the next job saw `/app/output` empty, holding only its own report file. Each job gets a fresh result
+volume, and the administrator retrieves that job's files afterwards.
+
+**Nothing produced by one job is visible to the next.** The repository is the only durable channel, so the teacher
+labels have to be committed to `pools/<pool>/teacher_labels.parquet` after every labeling job, and training and
+evaluation have to run inside one job. Use `grid <pool> <cond>`, not `train` followed by `eval`. The split into
+separate `train` and `eval` jobs only works where the result volume survives between jobs, for example on a local
+machine.
+
+Unpacking is therefore part of every job, and it is cheap: 30 GB takes about two minutes on this service, so a
+training job spends about twenty seconds on its 5.5 GB and an evaluation job about two seconds on its 0.4 GB. There is
+no point running `data` more than once; it is only useful as a one-off check that the sixteen parts verify and unpack.
+
+| Path inside the archive | Content |
+|---|---|
+| `pool/` | 13,285 training images (SUN RGB-D, KITTI, NYUv2), pool v4 |
+| `eval/` | 757 evaluation images and lists (iBims-1, NYUv2, ETH3D) |
+| `models/DepthLM/` + `models/DepthLM_MODEL_LICENSE.txt` | teacher weights (24 GB) with a copy of the FAIR Noncommercial Research License, as its section 1.b.ii requires when the weights are handed to a third party |
+| `extra_done.txt`, `SHA256SUMS_all`, `README_ADMIN.txt` | marker, checksums of every file, note for the administrator |
+
+The archive contains no secret, so the repository and the request issues stay public and nothing has to be revoked
+afterwards. Ground-truth depth is not shipped as files; the evaluation pixels and their depth values are in `ref/`.
+
+- The student `Qwen/Qwen2.5-VL-3B-Instruct` (Apache-2.0, 7.5 GB) is downloaded from Hugging Face without a token
+  and cached in `$WORK_ROOT/hf`, which is `/app/data/hf` when that is writable and the container's temporary disk
+  otherwise. A local copy under `models/Qwen2.5-VL-3B-Instruct` is used if present.
+- Fallbacks that need a Hugging Face read token (`hf_…` argument or `/app/data/hf_token.txt`): downloading the image
+  packs from the private dataset repo `jh0624/depthlm-distill-data` and the gated teacher from `facebook/DepthLM`.
+  Never commit a token.
+
+Sizes, so the quota is never the thing that stops a run:
+
+| What | Where | Size |
+|---|---|---|
+| Extracted archive (pool images, evaluation set, teacher weights) | `/app/data`, next to the parts | 30 GB |
+| Archive parts, deletable after extraction | `/app/data` | 29 GB |
+| Student weight cache | `$WORK_ROOT/hf` | 7.5 GB |
+| One grid: 8 LoRA adapters, evaluations, tables, figures, zip | `/app/output` | ≈0.9 GB |
+| All six grids plus labels | `/app/output` | ≈6 GB |
+
+`bash run.sh check` prints the live numbers and flags anything in `/app/output` that is not a result. `NEED_GB`
+(default 32) is the free space the script insists on before it extracts; it refuses early rather than filling the
+volume.
+
+</details>
+
 ## Experiments
 
-| Pool | Images / scenes | Domain | Labels |
+### Pools
+
+| Pool | Images / scenes | Domain | Teacher labels (44,800 px per pool) |
 |---|---|---|---|
-| `mixed` | 6,400 / 3,684 | indoor 50 %, driving 50 % (matches DepthLM's per-dataset sampling) | 43,640 px included; 1,160 px (146 images replaced in v4) produced on the service |
+| `mixed` | 6,400 / 3,684 | indoor 50 %, driving 50 % (matches DepthLM's per-dataset sampling) | 42,256 px from v4 (local, 1,160 of them on the service) + 2,544 px for v5 (local) |
 | `indoor` | 6,400 / 5,674 | SUN RGB-D, NYUv2 | produced on the service |
-| `outdoor` | 6,400 / 509 | KITTI (scene count saturates at 509; upper N cells add frames of the same drives, reported as a limitation) | produced on the service |
+| `outdoor` | 6,400 / 509 | KITTI raw, depth selection, KITTI 2012 and 2015 | 39,160 px from v4 (service) + 5,640 px for v5 (local) |
+
+The pixels per image are fixed in advance (16 per image, uniform in the image away from a 5 % border, seeded by the
+image path) and a cell uses the first k of them on the first N images, so every cell of a pool reads the same labels.
+
+Pool v5 (2026-09-29) moves near-duplicate images to the end of the image order (`experiments/07_dedup_pool_order.py`,
+reports in `pools/*/dedup_report.md`). Walking the order within each domain, an image goes to the back of its domain
+when an image already kept is within dHash distance 10 and above 0.9 grey-level correlation at 32×32; every position is
+then refilled from the domain that held it, so the indoor/driving split stays 50/50 at every N. DepthLM subsampled
+"highly similar video frames" because they did not help, without stating a rule; this is an explicit version of that
+step. It moves 1,365 of the 6,400 outdoor images (raw frames taken while the car was stopped or slow, and KITTI 2012
+and 2015 images, which the pool had taken as `_10`/`_11` pairs 0.1 s apart) and 749 driving images of the mixed pool;
+the indoor pool has none. Distinct images among the first N = 400 / 1,600 / 6,400 go from 372 / 1,130 / 5,035 to
+400 / 1,600 / 5,035 in the outdoor pool and from 391 / 1,388 / 5,651 to 400 / 1,600 / 5,651 in the mixed pool, so the
+many-images cells are not handicapped by near-copies. The image set, the pixel coordinates and the N = 6,400 cells
+are unchanged; only images that moved into the first 1,600 needed new labels.
 
 The driving pool's 509 scenes overstate the number of distinct places. The scene count treats each KITTI 2012 and KITTI
 2015 image as its own scene, but these images were cut from raw drives, and 249 of the 788 in the outdoor pool (165 of
@@ -325,8 +327,6 @@ they film one place under several drive numbers. This does not leak into any eva
 axis N adds fewer new places in the driving pool than the scene count suggests, and it is reported as a limitation
 when N and k are compared there.
 
-Pool v5 (2026-09-29, outdoor pool only): near-duplicate images are moved to the end of the image order (`experiments/07_dedup_pool_order.py`, report in `pools/outdoor/dedup_report.md`). Walking the order, an image goes to the back when an image already kept is within dHash distance 10 and above 0.9 grey-level correlation at 32×32. DepthLM subsampled "highly similar video frames" because they did not help, without stating a rule; this is an explicit version of that step. It moves 1,365 of the 6,400 outdoor images (893 raw frames, most of them taken while the car was stopped or slow, 195 KITTI 2015 and 146 KITTI 2012 images, which the pool had taken as `_10`/`_11` pairs 0.1 s apart, and 131 depth-selection frames). Distinct images among the first N go from 372 / 1,130 / 5,035 to 400 / 1,600 / 5,035 for N = 400 / 1,600 / 6,400, so the many-images cells are no longer handicapped by near-copies. The image set, the pixel coordinates and the N = 6,400 cells are unchanged; 5,640 pixels that moved into the first 1,600 images need new teacher labels, which are being produced locally. **Do not submit the outdoor grids until those labels are committed**; `run.sh` refuses to train on missing labels anyway. The same rule finds no near-duplicate in the indoor pool. The mixed pool (13 % near-duplicates at N = 1,600) keeps its current order for now, because its soft grid has already been trained.
-
 Pool v4 (2026-09-23): NYUv2 has ~3 images per room, so the 200 NYUv2 evaluation images' 195 rooms are excluded
 from the pools at the scene level (146 mixed-pool and 333 indoor-pool images replaced in place by the next unused
 indoor candidates of the same deterministic order; see `pools/*/pool_v4_report.md`). No evaluation image or scene of
@@ -334,9 +334,7 @@ NYUv2, iBims-1 or ETH3D is in any pool.
 
 Grid cells: `N400_k1 N400_k4 N400_k16 N1600_k1 N1600_k4 N1600_k16 N6400_k1 N6400_k4`, nested (image order fixed,
 pixel indices 0..k−1 shared). Student: Qwen2.5-VL-3B-Instruct + LoRA r16 α32 on q/k/v/o, AdamW 1e-4 cosine,
-batch 1 × accumulation 8, 2 epochs, seed fixed. Evaluation: the large set of each of the pool's own evaluation sets
-(below); results are written per set as `eval/eval_<cond>_<cell>_<pool>_f750_large__<set>.parquet`. Metric: δ1
-(max(p/g, g/p) < 1.25) and AbsRel, with midpoint decoding.
+batch 1 × accumulation 8, 2 epochs, seed fixed. Metric: δ1 (max(p/g, g/p) < 1.25) and AbsRel, with midpoint decoding.
 
 ### Evaluation sets
 
@@ -374,17 +372,20 @@ by scene, this split is 43 consecutive scenes recorded on one evening, all at ni
 column measures night-time driving. As in the official procedure, points closer than 1 m are not removed: three of the
 2,500 pixels carry depths of 0.1 to 0.2 m from returns off the ego vehicle.
 
-Measured on an RTX PRO 4500: 0.46 s per training step, ≈10 GB VRAM per cell; teacher labeling 0.8–1.0 s per pixel,
+Measured on an RTX PRO 4500: 0.46 s per training step, ≈10 GB VRAM per cell; teacher labeling 0.8–1.5 s per pixel,
 ≈30 GB VRAM. H200 timings are to be measured.
 
 ## Local run
 
 ```bash
-bash run.sh smoke                        # installs requirements itself; no data needed
-DATA_ROOT=/path/to/data bash run.sh grid mixed soft
+bash run.sh smoke                                   # installs requirements itself; no data needed
+DATA_ROOT=/path/to/data bash run.sh grid mixed soft  # train and evaluate one grid
+DATA_ROOT=/path/to/data OUT_ROOT=/path/with/checkpoints bash run.sh eval outdoor soft   # evaluate adapters from an H200 zip
 ```
 
-`DATA_ROOT` must contain `pool/` and `eval/` (or the tar parts). Results go to `./results` unless `OUT_ROOT` is set.
+`DATA_ROOT` must contain `pool/` and `eval/` (or the tar parts); the driving sets are built locally with
+`experiments/41_build_ddad.py` and `experiments/43_build_nuscenes.py` from the original datasets and placed under
+`$DATA_ROOT/eval/ddad` and `$DATA_ROOT/eval/nuscenes`. Results go to `./results` unless `OUT_ROOT` is set.
 
 ## License and attribution
 
@@ -397,5 +398,7 @@ any checkpoint trained from them, the evaluation reference files or the vendored
 - `third_party/DepthLM_Official/utils/` is vendored from the DepthLM code repository under CC BY-NC 4.0.
 - `ref/` contains sparse pixel coordinates and depth values from iBims-1, NYU Depth v2 and ETH3D under those datasets'
   research-use terms. `smoke/data/` images are synthetic. Full datasets are not redistributed.
+- The DDAD and nuScenes evaluation sets are not in the repository. `experiments/41_build_ddad.py` and
+  `experiments/43_build_nuscenes.py` rebuild them from the original datasets (both CC BY-NC-SA 4.0).
 
 See `NOTICE` for details.

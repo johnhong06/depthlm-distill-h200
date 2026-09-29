@@ -328,12 +328,17 @@ batch 1 × accumulation 8, 2 epochs, seed fixed. Evaluation: `small` = 300 / 320
 | Indoor | NYUv2 | near | 200 / 2,000 | same dataset, rooms excluded from the pools (pool v4) | Kinect |
 | Indoor | iBims-1 | far | 100 / 3,000 | not in any pool | laser scan |
 | Driving | KITTI-HO | near | 200 / 2,000 | same sensor and city; drives no pool uses, with every place that appears in a pool removed | accumulated LiDAR (KITTI annotated depth) |
-| Driving | DDAD | far | 250 / 2,500 (in preparation) | different vehicle and countries, not in any pool | LiDAR |
+| Driving | DDAD | far | 250 / 2,500 | different vehicle and countries, not in any pool; DepthLM's own benchmark | LiDAR |
+| Driving | nuScenes | far | in preparation | DepthLM's own benchmark split (last 5 % of trainval samples), not in any pool | LiDAR |
 | Mixed | ETH3D | reference | 454 / 4,503 | not in any pool | laser scan |
 
 Ground truth is the Euclidean distance from the camera centre to the point, the quantity the prompt asks for, in every
 set. DepthLM's own DDAD, nuScenes and Waymo scripts use z-depth instead, so KITTI-HO and DDAD also store z-depth, used
 only to compare the teacher with the DDAD value in the DepthLM paper (δ1 0.670).
+
+DDAD and nuScenes are also in DepthLM's result tables, next to Qwen2.5-VL-3B without training, DepthLM-3B (the same backbone trained on 16M ground-truth images) and pure vision models, so these two columns are the ones that can be set beside published numbers. If nuScenes can be built, it replaces KITTI-HO, which is not in any published table.
+
+DDAD (`experiments/41_build_ddad.py`) follows DepthLM's `curate_ddad.py`: the 50 validation scenes, all six cameras, LiDAR projected into the image with the nearest point kept per pixel, and pixels drawn at random from those with depth. DepthLM uses every sample and 100 pixels per image; here five (sample, camera) pairs per scene are drawn (seed 0), 250 images, with 10 pixels per image away from a 10-pixel border. The procedure does not mask the ego vehicle, and the five non-front cameras see part of it: of the 120 sampled pixels in the lower quarter of those cameras, roughly half lie on the hood or on body panels reflecting the scene (visual check), and they carry the depth of the ground behind the car. This is inherited from the official procedure, so the DDAD column keeps these pixels to stay comparable with the published numbers, and a sensitivity value without the lower quarter of the non-front cameras is reported beside it.
 
 KITTI-HO (`experiments/40_build_kitti_heldout.py`) is held out by place, not only by drive number, because two kinds of
 overlap survive a drive-level split:

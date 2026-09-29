@@ -1,4 +1,4 @@
-"""학생 평가 — 어댑터(또는 zero-shot 베이스)로 iBims1 test / NYUv2 test / ETH3D 부분집합에서 숫자 디코딩 + fd 트리.
+"""학생 평가 — 어댑터(또는 zero-shot 베이스)로 평가 세트(--datasets: iBims1·NYUv2·ETH3D·DDAD·nuScenes …)에서 숫자 디코딩 + fd 트리.
 지표: δ₁·AbsRel, 학생 CoV 의 AUSE/AUC, 픽셀당 시간·VRAM. 출력: outputs/distill/eval_<tag>.parquet + 콘솔."""
 from __future__ import annotations
 import argparse, os, sys, time
@@ -16,6 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); MODEL = os.e
 PROMPT = ("The red arrow in the image points at a specific location. Estimate the distance from the camera to that location in meters. "
           "Answer with only a number, for example 2.35.")
 def resolve(p): p = os.path.expandvars(os.path.expanduser(p)); return p if os.path.isabs(p) else os.path.join(ROOT, p)
+LEGACY = ("ibims1", "nyuv2", "eth3d")   # ref/dist_*·ref/tree_px_* 로 픽셀을 고르는 기존 세트
 
 @torch.no_grad()
 def decode(model, tok, inputs, max_steps=8):
@@ -32,16 +33,26 @@ def decode(model, tok, inputs, max_steps=8):
     m = _FLOAT_RE.search(s); return float(m.group(0)) if m else np.nan
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("--adapter", default=""); ap.add_argument("--tag", required=True); ap.add_argument("--device", default="cuda:0"); ap.add_argument("--limit_img", type=int, default=0, help="스모크용: 데이터셋당 이미지 수"); ap.add_argument("--per_max", type=int, default=0, help="스모크용: 이미지당 픽셀 상한"); ap.add_argument("--decimals", type=int, default=1, choices=[1, 2]); ap.add_argument("--focal", type=float, default=750.0); ap.add_argument("--eval_set", default="small", choices=["small", "large"], help="small = ref/tree_px (300/320/302), large = ref/dist_* 전체 (3,000/2,000/4,503)"); args = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument("--adapter", default=""); ap.add_argument("--tag", required=True); ap.add_argument("--device", default="cuda:0"); ap.add_argument("--limit_img", type=int, default=0, help="스모크용: 데이터셋당 이미지 수"); ap.add_argument("--per_max", type=int, default=0, help="스모크용: 이미지당 픽셀 상한"); ap.add_argument("--decimals", type=int, default=1, choices=[1, 2]); ap.add_argument("--focal", type=float, default=750.0); ap.add_argument("--eval_set", default="small", choices=["small", "large"], help="small = ref/tree_px (300/320/302), large = ref/dist_* 전체 (3,000/2,000/4,503)")
+    ap.add_argument("--datasets", default=",".join(LEGACY), help="쉼표 구분. 기본값(ibims1,nyuv2,eth3d)이면 예전처럼 eval_<tag>[_large].parquet 한 파일, 아니면 데이터셋마다 eval_<tag>[_large]__<name>.parquet (있으면 건너뜀)"); args = ap.parse_args()
     dev = args.device; is_cuda = dev.startswith("cuda")
     proc = AutoProcessor.from_pretrained(MODEL); tok = proc.tokenizer
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(MODEL, dtype=torch.bfloat16, attn_implementation="sdpa", device_map=dev)
     if args.adapter: model = PeftModel.from_pretrained(model, os.path.expanduser(args.adapter)).merge_and_unload()
-    model.eval(); rows = []
-    for name in ["ibims1", "nyuv2", "eth3d"]:
-        # 교사 표(고속 복호·저해상도·캐스케이드)와 같은 픽셀 집합: outputs/tree_px_<name>.parquet (iBims1 300 / NYUv2 320 / ETH3D 303 px)
-        cfg = yaml.safe_load(open(resolve(f"configs/{name}.yaml"))); ds = DepthLMJsonl(resolve(cfg["jsonl"]), os.path.expandvars(cfg["image_folder"]), name, normalized_focal_length=args.focal)
-        px = (pd.read_parquet(resolve(f"ref/tree_px_{name}.parquet")) if args.eval_set == "small" else pd.read_parquet(resolve(f"ref/dist_{name}.parquet")).query("dist_ok == True"))[["image_id", "pixel_index"]]; idx = {ds.image_id(i): i for i in range(len(ds))}
+    model.eval(); rows = []; names = [x for x in args.datasets.split(",") if x]; legacy_out = names == list(LEGACY)
+    OUT = os.environ.get("OUT_ROOT", "results"); os.makedirs(resolve(f"{OUT}/eval"), exist_ok=True); base = resolve(f"{OUT}/eval/eval_{args.tag}{'_large' if args.eval_set == 'large' else ''}")
+    for name in names:
+        per = f"{base}__{name}.parquet"
+        if not legacy_out and os.path.exists(per): print(f"{name}: 이미 있음 → 건너뜀 ({per})", flush=True); continue
+        cfg = yaml.safe_load(open(resolve(f"configs/{name}.yaml")))
+        if not os.path.exists(resolve(cfg["jsonl"])): print(f"{name}: 평가 세트 없음({resolve(cfg['jsonl'])}) → 건너뜀", flush=True); continue
+        ds = DepthLMJsonl(resolve(cfg["jsonl"]), os.path.expandvars(cfg["image_folder"]), name, normalized_focal_length=args.focal); idx = {ds.image_id(i): i for i in range(len(ds))}
+        if name in LEGACY:   # 교사 표(고속 복호·저해상도·캐스케이드)와 같은 픽셀 집합: ref/tree_px_<name>.parquet (small) 또는 ref/dist_<name>.parquet (large)
+            px = (pd.read_parquet(resolve(f"ref/tree_px_{name}.parquet")) if args.eval_set == "small" else pd.read_parquet(resolve(f"ref/dist_{name}.parquet")).query("dist_ok == True"))[["image_id", "pixel_index"]]
+        elif args.eval_set == "large":   # 새 세트(주행 세트 등)는 jsonl 의 모든 질의 픽셀 = large. small 은 없다
+            px = pd.DataFrame([(ds.image_id(i), j) for i in range(len(ds)) for j in range(ds.num_pixels(i))], columns=["image_id", "pixel_index"])
+        else: print(f"{name}: small 세트 없음 → 건너뜀", flush=True); continue
+        n0 = len(rows)
         if args.limit_img: px = px[px.image_id.isin(sorted(px.image_id.unique())[:args.limit_img])]
         if args.per_max: px = px.groupby("image_id").head(args.per_max)
         chunk = 4 if name == "eth3d" else 8; t0 = time.time(); n = 0
@@ -56,7 +67,10 @@ def main():
             nd = enumerate_number_distribution(model, tok, inputs, torch.tensor([], dtype=torch.long), min_branch_p=0.005, chunk=chunk, stop_first_decimal=(args.decimals == 1), max_depth=6)
             rows.append({"dataset": name, "image_id": s.image_id, "pixel_index": j, "gt": s.depth_gt, "pred": val, "pred_mid": (val + 0.5 * 10 ** (-args.decimals)) if val == val else val, "cov": nd.stats()["dist_cov"], "ev": nd.expected_value(), "mass": nd.covered_mass, "sec_decode": t_dec}); n += 1; del inputs
         print(f"{name}: {n} px, {(time.time()-t0)/max(n,1):.2f} s/px", flush=True)
-    d = pd.DataFrame(rows); OUT = os.environ.get("OUT_ROOT", "results"); os.makedirs(resolve(f"{OUT}/eval"), exist_ok=True); d.to_parquet(resolve(f"{OUT}/eval/eval_{args.tag}{'_large' if args.eval_set == 'large' else ''}.parquet"), index=False)
+        if not legacy_out: pd.DataFrame(rows[n0:]).to_parquet(per, index=False)   # 데이터셋이 끝날 때마다 저장 (중간에 끊겨도 끝난 세트는 남는다)
+    d = pd.DataFrame(rows)
+    if legacy_out: d.to_parquet(f"{base}.parquet", index=False)
+    if not len(d): print("평가한 픽셀 없음", flush=True); return
     for name, g in d.groupby("dataset"):
         ok = g[g.pred.notna() & (g.pred > 0)]; gt = ok["gt"].values; p = ok.pred_mid.values; err = np.abs(p - gt) / gt; fail = (np.maximum(p / gt, gt / p) >= 1.25).astype(int)
         a = compute_aucs(gt, p, ok["cov"].values, metrics=("abs_rel",))["abs_rel"]["ause"]; auc = roc_auc_score(fail, ok["cov"].values) if fail.min() != fail.max() else np.nan

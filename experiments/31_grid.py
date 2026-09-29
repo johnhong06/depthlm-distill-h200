@@ -7,8 +7,9 @@
 import argparse, json, os
 import numpy as np, pandas as pd
 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); NAMES = {"ibims1": "iBims-1", "nyuv2": "NYUv2", "eth3d": "ETH3D (held-out)"}
-ap = argparse.ArgumentParser(); ap.add_argument("--cond", default="soft"); ap.add_argument("--eval_set", default="small", choices=["small", "large"]); ap.add_argument("--suffix", default="", help="태그 접미사 (예: _f500)"); ap.add_argument("--arms", default="pools/mixed/arms.json"); args = ap.parse_args()
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); NAMES = {"ibims1": "iBims-1", "nyuv2": "NYUv2", "ddad": "DDAD", "nuscenes": "nuScenes", "eth3d": "ETH3D (held-out)", "kitti_ho": "KITTI-HO"}
+ap = argparse.ArgumentParser(); ap.add_argument("--cond", default="soft"); ap.add_argument("--eval_set", default="small", choices=["small", "large"]); ap.add_argument("--suffix", default="", help="태그 접미사 (예: _f500)"); ap.add_argument("--arms", default="pools/mixed/arms.json"); ap.add_argument("--datasets", default=",".join(NAMES), help="쉼표 구분, 표에 넣을 평가 세트 (있는 것만)"); args = ap.parse_args()
+NAMES = {k: v for k, v in NAMES.items() if k in args.datasets.split(",")}
 OUT = os.environ.get("OUT_ROOT", "results")
 suf = "_large" if args.eval_set == "large" else ""
 cells = json.load(open(os.path.join(ROOT, args.arms)))["cells"]
@@ -16,10 +17,12 @@ def hit(p, g): p, g = np.asarray(p, float), np.asarray(g, float); return (np.max
 def boot(v, imgs, n=2000, seed=0):
     rng = np.random.default_rng(seed); u = np.unique(imgs); grp = [v[imgs == i] for i in u]
     return np.percentile([np.concatenate([grp[k] for k in rng.integers(0, len(u), len(u))]).mean() for _ in range(n)], [2.5, 97.5])
-def load(tag):
-    p = os.path.join(ROOT, f"{OUT}/eval/eval_{args.cond}_{tag}{args.suffix}{suf}.parquet")
-    if not os.path.exists(p): return None
-    d = pd.read_parquet(p); d = d[d.pred.notna() & (d.pred > 0)].copy(); d["pm"] = d["pred_mid"] if "pred_mid" in d else d["pred"] + 0.05; return d
+def load(tag):   # 예전 한 파일(eval_<tag>[_large].parquet)과 데이터셋별 파일(eval_<tag>[_large]__<name>.parquet)을 모두 읽는다
+    b = os.path.join(ROOT, f"{OUT}/eval/eval_{args.cond}_{tag}{args.suffix}{suf}")
+    ps = [q for q in [f"{b}.parquet"] + [f"{b}__{n}.parquet" for n in NAMES] if os.path.exists(q)]
+    if not ps: return None
+    d = pd.concat([pd.read_parquet(q) for q in ps], ignore_index=True).drop_duplicates(["dataset", "image_id", "pixel_index"]); d = d[d.dataset.isin(list(NAMES))]
+    d = d[d.pred.notna() & (d.pred > 0)].copy(); d["pm"] = d["pred_mid"] if "pred_mid" in d else d["pred"] + 0.05; return d
 D = {c["tag"]: load(c["tag"]) for c in cells}; have = [c for c in cells if D[c["tag"]] is not None]
 if not have: print("평가 결과 없음"); raise SystemExit
 rows = []
@@ -58,9 +61,10 @@ md = (f"## Grid: images N × pixels-per-image k (loss {args.cond}, eval_set {arg
       "Same teacher labels, same pixel indices, same init/shuffle seed; only N and k differ. Budget = N·k. Midpoint decoding. CI = image-cluster bootstrap 95%.\n\n"
       + cell_df.to_markdown(index=False, floatfmt=".3f") + "\n\n### Paired comparisons\n\n" + (comp_df.to_markdown(index=False) if len(comp_df) else "n/a") + "\n")
 os.makedirs(os.path.join(ROOT, f"{OUT}/tables"), exist_ok=True); open(os.path.join(ROOT, f"{OUT}/tables/table_grid_{args.cond}{args.suffix}{suf}.md"), "w").write(md); print(cell_df.to_string(index=False)); print(); print(comp_df.to_string(index=False) if len(comp_df) else "")
-fig, ax = plt.subplots(1, 3, figsize=(11.5, 3.6))
+present = [ds for ds in NAMES if (cell_df.dataset == NAMES[ds]).any()]
+fig, ax = plt.subplots(1, max(1, len(present)), figsize=(3.9 * max(1, len(present)), 3.6), squeeze=False); ax = ax[0]
 cols = {400: "#1f77b4", 1600: "#d62728", 6400: "#2ca02c"}
-for a_, ds in zip(ax, NAMES):
+for a_, ds in zip(ax, present):
     sub = cell_df[cell_df.dataset == NAMES[ds]]
     for N, g in sub.groupby("N"):
         g = g.sort_values("budget"); a_.plot(g.budget, g["δ1"], marker="o", lw=1.6, color=cols.get(N, None), label=f"N={N} images")

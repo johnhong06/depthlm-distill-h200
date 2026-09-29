@@ -76,5 +76,11 @@
  "seed": 0,
  "n_images": 6400,
  "n_scenes": 509,
- "n_label_px": 44800
+ "n_label_px": 44800,
+ "version": "v5",
+ "dedup": {
+  "ham": 10,
+  "corr": 0.9,
+  "moved": 1365
+ }
 }

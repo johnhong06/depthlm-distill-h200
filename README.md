@@ -198,8 +198,8 @@ carry no loss condition and the same value appears in all three pool tables.
 | mixed | hard | local | committed | | | pending | |
 | indoor | soft | H200 | committed | | | pending | |
 | indoor | hard | H200 | committed | | | pending | |
-| outdoor | soft | H200 | committed | | | pending | |
-| outdoor | hard | H200 | committed | | | pending | |
+| outdoor | soft | H200 | v5: 5,640 px to add, do not submit yet | | | pending | |
+| outdoor | hard | H200 | v5: 5,640 px to add, do not submit yet | | | pending | |
 
 ### Mixed pool (indoor 50 / driving 50)
 
@@ -308,6 +308,8 @@ distance ≤ 10, correlation > 0.9); in the mixed pool it is 176 of 788. The cam
 they film one place under several drive numbers. This does not leak into any evaluation set, but it means the image
 axis N adds fewer new places in the driving pool than the scene count suggests, and it is reported as a limitation
 when N and k are compared there.
+
+Pool v5 (2026-09-29, outdoor pool only): near-duplicate images are moved to the end of the image order (`experiments/07_dedup_pool_order.py`, report in `pools/outdoor/dedup_report.md`). Walking the order, an image goes to the back when an image already kept is within dHash distance 10 and above 0.9 grey-level correlation at 32×32. DepthLM subsampled "highly similar video frames" because they did not help, without stating a rule; this is an explicit version of that step. It moves 1,365 of the 6,400 outdoor images (893 raw frames, most of them taken while the car was stopped or slow, 195 KITTI 2015 and 146 KITTI 2012 images, which the pool had taken as `_10`/`_11` pairs 0.1 s apart, and 131 depth-selection frames). Distinct images among the first N go from 372 / 1,130 / 5,035 to 400 / 1,600 / 5,035 for N = 400 / 1,600 / 6,400, so the many-images cells are no longer handicapped by near-copies. The image set, the pixel coordinates and the N = 6,400 cells are unchanged; 5,640 pixels that moved into the first 1,600 images need new teacher labels, which are being produced locally. **Do not submit the outdoor grids until those labels are committed**; `run.sh` refuses to train on missing labels anyway. The same rule finds no near-duplicate in the indoor pool. The mixed pool (13 % near-duplicates at N = 1,600) keeps its current order for now, because its soft grid has already been trained.
 
 Pool v4 (2026-09-23): NYUv2 has ~3 images per room, so the 200 NYUv2 evaluation images' 195 rooms are excluded
 from the pools at the scene level (146 mixed-pool and 333 indoor-pool images replaced in place by the next unused

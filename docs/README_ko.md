@@ -1,6 +1,6 @@
 # depthlm-distill-h200 (한국어)
 
-DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Qwen2.5-VL-3B 학생(LoRA)에 증류하는 실험이다. Aerodrone H200 서비스(깃허브 이슈 → 젠킨스 → 컨테이너)에서 사람 손 없이 돌도록 묶어 두었다. 기준 문서는 영어 [README](../README.md)이고, 결과 표는 그곳 한 곳에서만 관리한다.
+DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Qwen2.5-VL-3B 학생(LoRA)에 증류하는 실험이다. Aerodrone H200 서비스(깃허브 이슈 → 젠킨스 → 컨테이너)에서 사람 손 없이 돌도록 묶어 두었다. 기준 문서는 영어 [README](https://github.com/johnhong06/depthlm-distill-h200#readme)이고, 결과 표는 그곳 한 곳에서만 관리한다.
 
 ## 한눈에 보기
 

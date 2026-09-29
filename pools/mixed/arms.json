@@ -80,5 +80,10 @@
  "n_scenes": 3684,
  "n_label_px": 44800,
  "excluded_eval_scenes": "nyuv2 eval 200 scenes",
- "version": "v4"
+ "version": "v5",
+ "dedup": {
+  "ham": 10,
+  "corr": 0.9,
+  "moved": 749
+ }
 }

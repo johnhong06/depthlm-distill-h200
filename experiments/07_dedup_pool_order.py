@@ -30,15 +30,20 @@ def main():
     cells = [(c["N"], c["k"]) for c in arms["cells"]]
     F = [feats(os.path.join(a.data_root, r["image"])) for r in recs]; H = np.stack([f[0] for f in F]); V = np.stack([f[1] for f in F])
 
-    kept, moved, match = [], [], {}
-    for i in range(len(recs)):
-        if kept:
-            K = np.array(kept); ham = np.unpackbits(H[K] ^ H[i], axis=1).sum(1); cand = K[ham <= a.ham]
-            c = V[cand] @ V[i] / V.shape[1] if len(cand) else np.array([])
-            if len(c) and c.max() > a.corr: moved.append(i); match[i] = int(cand[c.argmax()]); continue
-        kept.append(i)
-    new = kept + moved; nrec = [recs[i] for i in new]
-    print(f"{a.pool}: {len(recs)}장 중 앞 이미지와 거의 같은 {len(moved)}장을 뒤로 → 서로 다른 이미지 {len(kept)}장이 앞에", flush=True)
+    # 도메인마다 원래 순서대로 훑어 중복을 그 도메인의 뒤로 보내고, 위치 i 는 원래 위치 i 의 도메인의 다음 이미지로 채운다
+    # → 어느 N 에서든 도메인 비율이 원래와 같다 (도메인이 하나인 풀은 "남긴 것 + 뒤로 보낸 것" 과 같다)
+    dom = [r["domain"] for r in recs]; queue, kept, moved, match = {}, [], [], {}
+    for d in dict.fromkeys(dom):
+        kd, md = [], []
+        for i in (i for i in range(len(recs)) if dom[i] == d):
+            if kd:
+                K = np.array(kd); ham = np.unpackbits(H[K] ^ H[i], axis=1).sum(1); cand = K[ham <= a.ham]
+                c = V[cand] @ V[i] / V.shape[1] if len(cand) else np.array([])
+                if len(c) and c.max() > a.corr: md.append(i); match[i] = int(cand[c.argmax()]); continue
+            kd.append(i)
+        queue[d] = iter(kd + md); kept += kd; moved += md
+    new = [next(queue[d]) for d in dom]; nrec = [recs[i] for i in new]; moved.sort()
+    print(f"{a.pool}: {len(recs)}장 중 같은 도메인의 앞 이미지와 거의 같은 {len(moved)}장을 도메인 안에서 뒤로 → 서로 다른 이미지 {len(kept)}장", flush=True)
 
     rows = {(N, k): pd.DataFrame([(r["image"], j) for r in nrec[:N] for j in range(k)], columns=["image_id", "pixel_index"]) for N, k in cells}
     todo = pd.concat(rows.values()).drop_duplicates().reset_index(drop=True)
@@ -61,6 +66,7 @@ def main():
           f"- 뒤로 보낸 이미지 {len(moved)}장, 소스별 {src.iloc[moved].value_counts().to_dict()}",
           f"- 서로 다른 이미지 수 (앞 N 장 안): 전 {{{', '.join(f'N{N}: {distinct(list(range(len(recs))), N)}' for N in Ns)}}} → 후 {{{', '.join(f'N{N}: {distinct(new, N)}' for N in Ns)}}}",
           f"- 장면 라벨 수 (앞 N 장): 전 {{{', '.join(f'N{N}: {len({r['scene'] for r in recs[:N]})}' for N in Ns)}}} → 후 {{{', '.join(f'N{N}: {len({r['scene'] for r in nrec[:N]})}' for N in Ns)}}}",
+          f"- 도메인 비율 (앞 N 장, 전 = 후): {{{', '.join(f'N{N}: { {k: int(v) for k, v in pd.Series([r["domain"] for r in nrec[:N]]).value_counts().items()} }' for N in Ns)}}}",
           f"- 소스 구성 (앞 1600 장): 전 {src.iloc[:1600].value_counts().to_dict()} → 후 {nsrc.iloc[:1600].value_counts().to_dict()}",
           f"- 필요한 라벨 {len(todo)} px 중 기존 라벨에 없는 {len(need)} px → `bash run.sh label {a.pool}` 가 이것만 라벨링한다",
           "", "뒤로 보낸 이미지와 짝(처음 20개):", ""] + [f"- `{recs[i]['image']}` ≈ `{recs[match[i]]['image']}`" for i in moved[:20]]

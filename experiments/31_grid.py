@@ -5,18 +5,17 @@
   (d) 같은 예산(N·k 동일) 셀 간 쌍대 Δδ1 = 고정 예산 배분 비교
 출력: paper/table_grid[_large].md, outputs/figures/fig_grid[_large].png"""
 import argparse, json, os
-import numpy as np, pandas as pd
+import numpy as np, pandas as pd, sys
 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); NAMES = {"ibims1": "iBims-1", "nyuv2": "NYUv2", "ddad": "DDAD", "nuscenes": "nuScenes", "eth3d": "ETH3D (held-out)"}
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, ROOT)
+from depthlm_uncertainty.eval_clusters import boot_ci, clusters   # DDAD·nuScenes 는 장면, 나머지는 사진 단위 (NOTES D-24)
+NAMES = {"ibims1": "iBims-1", "nyuv2": "NYUv2", "ddad": "DDAD", "nuscenes": "nuScenes", "eth3d": "ETH3D (held-out)"}
 ap = argparse.ArgumentParser(); ap.add_argument("--cond", default="soft"); ap.add_argument("--eval_set", default="small", choices=["small", "large"]); ap.add_argument("--suffix", default="", help="태그 접미사 (예: _f500)"); ap.add_argument("--arms", default="pools/mixed/arms.json"); ap.add_argument("--datasets", default=",".join(NAMES), help="쉼표 구분, 표에 넣을 평가 세트 (있는 것만)"); args = ap.parse_args()
 NAMES = {k: v for k, v in NAMES.items() if k in args.datasets.split(",")}
 OUT = os.environ.get("OUT_ROOT", "results")
 suf = "_large" if args.eval_set == "large" else ""
 cells = json.load(open(os.path.join(ROOT, args.arms)))["cells"]
 def hit(p, g): p, g = np.asarray(p, float), np.asarray(g, float); return (np.maximum(p / g, g / p) < 1.25).astype(float)
-def boot(v, imgs, n=2000, seed=0):
-    rng = np.random.default_rng(seed); u = np.unique(imgs); grp = [v[imgs == i] for i in u]
-    return np.percentile([np.concatenate([grp[k] for k in rng.integers(0, len(u), len(u))]).mean() for _ in range(n)], [2.5, 97.5])
 def load(tag):   # 예전 한 파일(eval_<tag>[_large].parquet)과 데이터셋별 파일(eval_<tag>[_large]__<name>.parquet)을 모두 읽는다
     b = os.path.join(ROOT, f"{OUT}/eval/eval_{args.cond}_{tag}{args.suffix}{suf}")
     ps = [q for q in [f"{b}.parquet"] + [f"{b}__{n}.parquet" for n in NAMES] if os.path.exists(q)]
@@ -30,14 +29,14 @@ for c in have:
     for ds in NAMES:
         g = D[c["tag"]][D[c["tag"]].dataset == ds]
         if not len(g): continue
-        h = hit(g.pm, g["gt"]); lo, hi = boot(h, g.image_id.values)
+        h = hit(g.pm, g["gt"]); lo, hi = boot_ci(h, clusters(ds, g.image_id.values))
         rows.append({"N": c["N"], "k": c["k"], "budget": c["budget"], "dataset": NAMES[ds], "n": len(g), "δ1": h.mean(), "CI": f"[{lo:.3f}, {hi:.3f}]", "AbsRel": float(np.mean(np.abs(g.pm - g["gt"]) / g["gt"]))})
 cell_df = pd.DataFrame(rows)
 def paired(t1, t2, ds):
     a, b = D[t1][D[t1].dataset == ds], D[t2][D[t2].dataset == ds]
     m = a.merge(b[["image_id", "pixel_index", "pm"]], on=["image_id", "pixel_index"], suffixes=("", "_b"))
     if len(m) < 10: return None
-    dd = hit(m.pm, m["gt"]) - hit(m.pm_b, m["gt"]); lo, hi = boot(dd, m.image_id.values); return dd.mean(), lo, hi, len(m)
+    dd = hit(m.pm, m["gt"]) - hit(m.pm_b, m["gt"]); lo, hi = boot_ci(dd, clusters(ds, m.image_id.values)); return dd.mean(), lo, hi, len(m)
 comp = []
 for ds in NAMES:
     for b in sorted({c["budget"] for c in have}):     # (d) 같은 예산
@@ -58,7 +57,7 @@ for ds in NAMES:
             if r: comp.append({"비교": f"k={k} 고정: N {Ns[i]}→{Ns[i+1]}", "종류": "이미지 수 한계효용", "dataset": NAMES[ds], "Δδ1": f"{r[0]:+.3f} [{r[1]:+.3f}, {r[2]:+.3f}]", "n": r[3]})
 comp_df = pd.DataFrame(comp)
 md = (f"## Grid: images N × pixels-per-image k (loss {args.cond}, eval_set {args.eval_set}, 2 epochs, nested pool)\n\n"
-      "Same teacher labels, same pixel indices, same init/shuffle seed; only N and k differ. Budget = N·k. Midpoint decoding. CI = image-cluster bootstrap 95%.\n\n"
+      "Same teacher labels, same pixel indices, same init/shuffle seed; only N and k differ. Budget = N·k. Midpoint decoding. CI = cluster bootstrap 95% (scene for DDAD and nuScenes, image otherwise).\n\n"
       + cell_df.to_markdown(index=False, floatfmt=".3f") + "\n\n### Paired comparisons\n\n" + (comp_df.to_markdown(index=False) if len(comp_df) else "n/a") + "\n")
 os.makedirs(os.path.join(ROOT, f"{OUT}/tables"), exist_ok=True); open(os.path.join(ROOT, f"{OUT}/tables/table_grid_{args.cond}{args.suffix}{suf}.md"), "w").write(md); print(cell_df.to_string(index=False)); print(); print(comp_df.to_string(index=False) if len(comp_df) else "")
 present = [ds for ds in NAMES if (cell_df.dataset == NAMES[ds]).any()]

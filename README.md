@@ -48,11 +48,15 @@ cell has not been evaluated yet. The numbers come from each cell's evaluation lo
 Cross-domain scores are not computed, since they would measure the domain gap rather than the allocation or the loss.
 
 **Decision rule (fixed on 2026-09-29, before any grid finished).** Every comparison, whether equal-budget cells or
-soft against hard in the same cell, is a paired difference in δ1 on the same pixels with a 95 % bootstrap interval,
-computed separately on each of the pool's sets. A result is claimed when all of the pool's sets point the same way and
+soft against hard in the same cell, is a paired difference in δ1 on the same pixels with a 95 % cluster bootstrap
+interval, computed separately on each of the pool's sets. The clusters are scenes on DDAD and nuScenes, which have
+five to six images per scene, and images on iBims-1 and NYUv2, where an image is essentially its own scene; on a
+synthetic check, scene clusters widen the driving intervals by a factor of 1.5, which image clusters would hide. A result is claimed when all of the pool's sets point the same way and
 every interval excludes zero. The same direction with only some intervals excluding zero is reported as weak evidence,
 and opposite directions as set-dependent, with no claim. For the mixed pool the rule is applied to the two indoor sets
 and to the two driving sets, and a claim for the pool needs both domains to agree. Negative results are reported as well.
+`experiments/32_decide.py --pool <pool>` applies the rule to a pool's soft and hard results and writes
+`tables/decision_<pool>.md`, with the DDAD sensitivity value (lower quarter of the non-front cameras removed) beside it.
 
 The equal-budget comparisons are N400_k4 vs N1600_k1 at 1,600 queries; N400_k16, N1600_k4 and N6400_k1 at 6,400; and
 N1600_k16 vs N6400_k4 at 25,600. The last two rows of each table are baselines rather than cells of the design; they are
@@ -193,7 +197,7 @@ What the service does and does not keep decides how the jobs are split:
 |---|---|
 | `checkpoints/<cond>_<cell>_<pool>_f750/` | LoRA adapter (`adapter_model.safetensors`), `train.log` |
 | `eval/eval_<cond>_<cell>_<pool>_f750_large__<set>.parquet` | Per-pixel prediction, ground truth, uncertainty (older runs: one file per cell without `__<set>`) |
-| `tables/table_grid_<cond>_<pool>_f750_large.md` | δ1 with 95 % bootstrap interval per cell; row, column and equal-budget paired comparisons |
+| `tables/table_grid_<cond>_<pool>_f750_large.md` | δ1 with 95 % cluster bootstrap interval per cell (scenes on DDAD and nuScenes, images otherwise); row, column and equal-budget paired comparisons |
 | `figures/fig_grid_<cond>_<pool>_f750_large.png` | δ1 versus budget |
 | `results_<cond>_<pool>.zip` | Everything above for one grid, plus logs |
 | `run_*.log`, `train_*.log`, `eval_*.log` | Logs |

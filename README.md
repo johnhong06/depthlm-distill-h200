@@ -194,7 +194,7 @@ carry no loss condition and the same value appears in all three pool tables.
 
 | Pool | Condition | Machine | Teacher labels | Training | Evaluation | Driving sets | Result file |
 |---|---|---|---|---|---|---|---|
-| mixed | soft | local | committed | done | 4/8 (large only) | pending | |
+| mixed | soft | local | committed | done | 5/8 (large only) | pending | |
 | mixed | hard | local | committed | | | pending | |
 | indoor | soft | H200 | committed | | | pending | |
 | indoor | hard | H200 | committed | | | pending | |
@@ -213,7 +213,7 @@ carry no loss condition and the same value appears in all three pool tables.
 | | | | hard | — | — | — | — | — |
 | 1600 | 1 | 1600 | soft | 0.352 / 0.350 | 0.431 / 0.307 | — | — | 0.315 / 0.586 |
 | | | | hard | — | — | — | — | — |
-| 1600 | 4 | 6400 | soft | — | — | — | — | — |
+| 1600 | 4 | 6400 | soft | 0.417 / 0.330 | 0.444 / 0.318 | — | — | 0.302 / 0.547 |
 | | | | hard | — | — | — | — | — |
 | 1600 | 16 | 25600 | soft | — | — | — | — | — |
 | | | | hard | — | — | — | — | — |

@@ -3,7 +3,7 @@
 영문 원본: [../README.md](../README.md). 이 페이지는 사업단 이슈 작성용 요약이다.
 
 DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업단 H200, GitHub Issue → Jenkins)에서 돌리기 위한 저장소.
-혼합 풀의 교사 라벨은 저장소에 포함(`pools/mixed/teacher_labels.parquet`)되어 있고 실내·실외 풀 라벨은 파드에서 만든다.
+세 풀의 교사 라벨이 모두 저장소에 포함되어 있다 (`pools/<pool>/teacher_labels.parquet`, 실내·실외는 2026-09-28 H200 에서 생성).
 
 ## 이슈(요청서) 작성 값 — Aerodrone-H200 저장소의 "컨테이너 생성 및 코드 실행 요청" 템플릿
 
@@ -74,11 +74,11 @@ DepthLM(12B) → Qwen2.5-VL-3B 증류 실험을 비대화형 컨테이너(사업
 
 | 작업 | POOL | COND | 내용 | 상태 |
 |---|---|---|---|---|
-| 1 | indoor | soft | 실내 풀, 분포(KL) 증류, 8셀 | 풀 포함, 라벨링 필요 (MODE=label) |
-| 2 | outdoor | soft | 주행 풀, 분포 증류, 8셀 | 풀 포함, 라벨링 필요 |
+| 1 | indoor | soft | 실내 풀, 분포(KL) 증류, 8셀 | 라벨 포함 |
+| 2 | outdoor | soft | 주행 풀, 분포 증류, 8셀 | 라벨 포함 |
 | 3 | mixed | soft | 실내 50 / 주행 50 풀, 분포 증류, 8셀 | 포함 (로컬에서도 진행 중) |
-| 4 | indoor | hard | 실내 풀, greedy(CE) 증류 | 풀 포함, 라벨링 필요 |
-| 5 | outdoor | hard | 주행 풀, greedy 증류 | 풀 포함, 라벨링 필요 |
+| 4 | indoor | hard | 실내 풀, greedy(CE) 증류 | 라벨 포함 |
+| 5 | outdoor | hard | 주행 풀, greedy 증류 | 라벨 포함 |
 | 6 | mixed | hard | 혼합 풀, greedy 증류 | 포함 |
 
 풀 v4(09-23, NYUv2 평가 200장의 195개 방을 장면 단위로 제외. 혼합 146장·실내 333장을 같은 자리에서 교체, `pools/*/pool_v4_report.md`): mixed 6,400장/3,684장면(실내 50·주행 50, 라벨 43,640 px 포함 + 교체분 1,160 px 는 파드에서), indoor 6,400장/5,674장면(새 이미지 205장은 추가 팩 `depthlm_distill_data_extra.tar`), outdoor 6,400장/509장면(주행은 장면 수가 509에서 포화 → N 축 상단은 같은 장면의 프레임 추가, 한계로 명시). 격자 8셀: 이미지 수 N ∈ {400, 1600, 6400} × 이미지당 픽셀 k ∈ {1, 4, 16}, N·k ≤ 25,600. 셀당 2 epoch, LoRA r16, 학생 입력 초점 750.

@@ -189,10 +189,10 @@ carry no loss condition and the same value appears in all three pool tables.
 |---|---|---|---|---|---|---|
 | mixed | soft | local | committed | | | |
 | mixed | hard | local | committed | | | |
-| indoor | soft | H200 | | | | |
-| indoor | hard | H200 | | | | |
-| outdoor | soft | H200 | | | | |
-| outdoor | hard | H200 | | | | |
+| indoor | soft | H200 | committed | | | |
+| indoor | hard | H200 | committed | | | |
+| outdoor | soft | H200 | committed | | | |
+| outdoor | hard | H200 | committed | | | |
 
 ### Mixed pool (indoor 50 / driving 50)
 

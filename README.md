@@ -23,9 +23,9 @@ The decision rule was fixed before any grid finished and is stated under [Result
 
 | Pool | Loss | Machine | Pool version | Teacher labels | Training | Evaluation |
 |---|---|---|---|---|---|---|
-| mixed | soft | local | v5 | 2,544 px being added (local) | queued (retraining on v5) | local |
-| mixed | hard | local | v5 | 2,544 px being added (local) | queued | local |
-| indoor | soft | H200 | v4 = v5 | committed | running | on H200 |
+| mixed | soft | local | v5 | committed | cell by cell | 1/8 |
+| mixed | hard | local | v5 | committed | cell by cell | 1/8 |
+| indoor | soft | H200 | v4 = v5 | committed | done | done (8/8) |
 | indoor | hard | H200 | v4 = v5 | committed | next | on H200 |
 | outdoor | soft | H200 | v5 | committed (5,640 px added locally) | after indoor hard | local, from the adapters |
 | outdoor | hard | H200 | v5 | committed (5,640 px added locally) | | local, from the adapters |
@@ -66,8 +66,8 @@ single models evaluated once, so they carry no loss condition.
 
 | N | k | Budget | Loss | iBims-1 | NYUv2 | DDAD | nuScenes |
 |---:|---:|---:|:--|:--|:--|:--|:--|
-| 400 | 1 | 400 | soft | — | — | — | — |
-| | | | hard | — | — | — | — |
+| 400 | 1 | 400 | soft | 0.344 / 0.363 | 0.366 / 0.313 | 0.163 / 0.619 | 0.175 / 0.765 |
+| | | | hard | 0.338 / 0.360 | 0.393 / 0.307 | 0.159 / 0.646 | 0.183 / 0.711 |
 | 400 | 4 | 1600 | soft | — | — | — | — |
 | | | | hard | — | — | — | — |
 | 400 | 16 | 6400 | soft | — | — | — | — |
@@ -82,28 +82,28 @@ single models evaluated once, so they carry no loss condition.
 | | | | hard | — | — | — | — |
 | 6400 | 4 | 25600 | soft | — | — | — | — |
 | | | | hard | — | — | — | — |
-| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | — | — |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 | 0.581 / 0.694 |
 | **student, no distillation** | | | | — | — | — | — |
 
 ### Indoor pool
 
 | N | k | Budget | Loss | iBims-1 | NYUv2 |
 |---:|---:|---:|:--|:--|:--|
-| 400 | 1 | 400 | soft | — | — |
+| 400 | 1 | 400 | soft | 0.322 / 0.364 | 0.403 / 0.307 |
 | | | | hard | — | — |
-| 400 | 4 | 1600 | soft | — | — |
+| 400 | 4 | 1600 | soft | 0.467 / 0.293 | 0.564 / 0.246 |
 | | | | hard | — | — |
-| 400 | 16 | 6400 | soft | — | — |
+| 400 | 16 | 6400 | soft | 0.600 / 0.217 | 0.703 / 0.189 |
 | | | | hard | — | — |
-| 1600 | 1 | 1600 | soft | — | — |
+| 1600 | 1 | 1600 | soft | 0.461 / 0.297 | 0.539 / 0.252 |
 | | | | hard | — | — |
-| 1600 | 4 | 6400 | soft | — | — |
+| 1600 | 4 | 6400 | soft | 0.596 / 0.218 | 0.730 / 0.180 |
 | | | | hard | — | — |
-| 1600 | 16 | 25600 | soft | — | — |
+| 1600 | 16 | 25600 | soft | 0.666 / 0.199 | 0.777 / 0.169 |
 | | | | hard | — | — |
-| 6400 | 1 | 6400 | soft | — | — |
+| 6400 | 1 | 6400 | soft | 0.602 / 0.216 | 0.724 / 0.181 |
 | | | | hard | — | — |
-| 6400 | 4 | 25600 | soft | — | — |
+| 6400 | 4 | 25600 | soft | 0.664 / 0.199 | 0.773 / 0.160 |
 | | | | hard | — | — |
 | **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 |
 | **student, no distillation** | | | | — | — |
@@ -128,7 +128,7 @@ single models evaluated once, so they carry no loss condition.
 | | | | hard | — | — |
 | 6400 | 4 | 25600 | soft | — | — |
 | | | | hard | — | — |
-| **teacher, DepthLM 12B** | | | | — | — |
+| **teacher, DepthLM 12B** | | | | 0.652 / 0.240 | 0.581 / 0.694 |
 | **student, no distillation** | | | | — | — |
 
 ### Baselines
@@ -142,7 +142,7 @@ context rather than serving as paired comparisons.
 
 | Baseline | iBims-1 | NYUv2 | DDAD | nuScenes |
 |---|:--|:--|:--|:--|
-| Teacher, DepthLM 12B, measured | 0.811 / 0.141 | 0.889 / 0.122 | — | — |
+| Teacher, DepthLM 12B, measured | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 (z: 0.677) | 0.581 / 0.694 (z: 0.640) |
 | Student before distillation, Qwen2.5-VL-3B, measured | — | — | — | — |
 | *paper:* DepthLM 12B (Pixtral) | 0.870 | 0.799 | 0.670 | 0.819 |
 | *paper:* DepthLM 3B (Qwen2.5-VL-3B trained on 16M ground-truth images) | 0.890 | 0.868 | 0.724 | 0.870 |

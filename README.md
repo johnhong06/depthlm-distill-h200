@@ -190,8 +190,11 @@ What the service does and does not keep decides how the jobs are split:
 - Re-submitting a command resumes: a trained cell, a finished evaluation or a completed label shard is skipped, as long
   as `/app/output` is kept.
 - Evaluation covers only the pool's own sets (`EVAL_DATASETS`: indoor → `ibims1 nyuv2`, outdoor → `ddad nuscenes`, mixed
-  → all four) and only the large set (`EVAL_SETS=large`; the small set is a subset of it and is read out of it). A set
-  that is not under `$DATA_ROOT/eval` is skipped with a message, and the zip still carries the adapters.
+  → all four) and only the large set (`EVAL_SETS=large`; the small set is a subset of it and is read out of it). DDAD
+  and nuScenes are not in the 30 GB archive; they come as a separate `depthlm_drive_eval.zip` (580 MB) that the
+  administrator places anywhere under `/app/data`, and the job unpacks it into the work volume, checks it against its
+  `SHA256SUMS` and links it into `$DATA_ROOT/eval`. A set that is still missing is skipped with a message, and the zip
+  still carries the adapters.
 - Stdout is a summary only (the issue report is capped at 65,000 characters); full logs go to `/app/output`.
 
 ### Outputs (`/app/output`)
@@ -206,7 +209,7 @@ What the service does and does not keep decides how the jobs are split:
 | `run_*.log`, `train_*.log`, `eval_*.log` | Logs |
 
 After each grid job, ask the administrator for that job's `results_<cond>_<pool>.zip`, and check that it contains
-`checkpoints/`: the outdoor adapters are evaluated locally, and any set added later is evaluated from these files.
+`checkpoints/`: any set added later is evaluated from these files.
 
 <details>
 <summary>Data archive, storage and sizes on the service</summary>

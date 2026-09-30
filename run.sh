@@ -365,6 +365,31 @@ run_cells() { local fn=$1; if [ "$NPROC_TRAIN" -gt 1 ]; then   # GPU 한 장 통
     local i=0; for cell in $CELLS; do if [ "$NDEV" -gt 1 ]; then CUDA_VISIBLE_DEVICES=${DEVS[$((i % NDEV))]} $fn "$cell" & else $fn "$cell" & fi; i=$((i+1)); [ $((i % NPROC_TRAIN)) -eq 0 ] && wait; done; wait
   else for cell in $CELLS; do $fn "$cell"; done; fi; }
 NCELL=$(echo $CELLS | wc -w)
+if [ "$MODE" != train ]; then   # 주행 평가 세트(DDAD·nuScenes)는 30 GB 아카이브 밖의 별도 묶음(drive_eval, 550 MB)이다. /app/data 아래에 풀려 있거나 zip 으로 있으면 $DATA_ROOT/eval 에 연결한다
+  for ds in $EVAL_DATASETS; do case $ds in ddad|nuscenes) ;; *) continue;; esac; [ -f "$DATA_ROOT/eval/$ds/${ds}_val.jsonl" ] && continue
+    DE=""; for d in /app/data "$DATA_SRC" "$WORK_ROOT/drive_eval"; do [ -d "$d" ] && [ -z "$DE" ] && DE=$(find -L "$d" -maxdepth 5 -name "${ds}_val.jsonl" -path "*/$ds/*" -printf "%h\n" 2>/dev/null | head -1 || true); done
+    if [ -z "$DE" ]; then Z=$(python - "$ds" /app/data "$DATA_SRC" <<'PYF'
+import sys, os, zipfile; ds = sys.argv[1]
+for root in sys.argv[2:]:
+    for dp, dn, fn in os.walk(root, followlinks=True):
+        if dp[len(root):].count(os.sep) >= 4: dn[:] = []
+        for f in fn:
+            p = os.path.join(dp, f)
+            if f.endswith(".zip") and zipfile.is_zipfile(p) and any(n.endswith(f"{ds}/{ds}_val.jsonl") for n in zipfile.ZipFile(p).namelist()): print(p); sys.exit(0)
+PYF
+)
+      if [ -n "$Z" ]; then if python - "$Z" "$WORK_ROOT/drive_eval" <<'PYE'
+import sys, zipfile, hashlib, os; z, out = sys.argv[1:3]; zipfile.ZipFile(z).extractall(out)
+for dp, _, fn in os.walk(out):   # 묶음에 든 SHA256SUMS 로 검증 (경로는 SHA256SUMS 가 있는 폴더 기준)
+    if "SHA256SUMS" in fn:
+        bad = [l.split()[1] for l in open(f"{dp}/SHA256SUMS") if hashlib.sha256(open(f"{dp}/{l.split()[1]}", "rb").read()).hexdigest() != l.split()[0]]
+        print(f"[eval] drive_eval 풀기 {z} → {out}, SHA256 불일치 {len(bad)} 개"); sys.exit(1 if bad else 0)
+print(f"[eval] drive_eval 풀기 {z} → {out} (SHA256SUMS 없음 — 검증 생략)")
+PYE
+      then DE=$(find "$WORK_ROOT/drive_eval" -maxdepth 4 -name "${ds}_val.jsonl" -printf "%h\n" | head -1); else say "!!! [eval] $ds: $Z 풀기 또는 SHA256 검증 실패"; fi; fi
+    fi
+    if [ -n "$DE" ]; then mkdir -p "$DATA_ROOT/eval" && ln -sfn "$DE" "$DATA_ROOT/eval/$ds" && say "[eval] $ds: $DE 를 $DATA_ROOT/eval/$ds 로 연결 ($(wc -l < "$DE/${ds}_val.jsonl") 장)" || say "!!! [eval] $ds: $DATA_ROOT/eval 에 연결 실패 (쓰기 권한)"; fi; done
+fi
 if [ "$MODE" != train ]; then   # 이 환경에 없는 평가 세트는 건너뛴다 (예: H200 아카이브에는 주행 세트가 없다 → 어댑터를 zip 으로 받아 로컬에서 평가)
   AV=""; for ds in $EVAL_DATASETS; do if [ -f "$DATA_ROOT/eval/$ds/${ds}_val.jsonl" ]; then AV="$AV $ds"; else say "[eval] $ds: $DATA_ROOT/eval/$ds 에 평가 세트가 없어 이 작업에서는 건너뜀 (어댑터로 로컬에서 평가)"; fi; done; EVAL_DATASETS=${AV# }
   say "[eval] 평가 세트: ${EVAL_DATASETS:-없음 → 학습과 결과 zip(어댑터 포함)만} | 세트 종류: $EVAL_SETS"; fi

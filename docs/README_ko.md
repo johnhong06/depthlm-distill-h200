@@ -25,7 +25,7 @@ DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Q
 | 실외 | soft | H200 | v5 | 커밋됨 (5,640 px 로컬 추가) | 실내 hard 다음 | 로컬(어댑터로) |
 | 실외 | hard | H200 | v5 | 커밋됨 (5,640 px 로컬 추가) | | 로컬(어댑터로) |
 
-순서. H200 은 GPU 한 장으로 한 번에 하나: `grid indoor soft`(진행 중) → `grid indoor hard` → `grid outdoor soft` → `grid outdoor hard`. 작업이 끝날 때마다 관리자에게 `results_<cond>_<pool>.zip` 을 받고 `checkpoints/` 가 들어 있는지 확인한다. 로컬은 실외·혼합 새 교사 라벨 → DDAD·nuScenes 교사 기준선 → 풀 v5 로 `grid mixed soft`·`grid mixed hard` → H200 zip 의 실외 어댑터를 DDAD·nuScenes 로 평가, 학습 전 학생을 네 세트로 평가.
+순서. H200 은 GPU 한 장으로 한 번에 하나: `grid indoor soft`(진행 중) → `grid indoor hard` → `grid outdoor soft` → `grid outdoor hard`. 작업이 끝날 때마다 관리자에게 `results_<cond>_<pool>.zip` 을 받고 `checkpoints/` 가 들어 있는지 확인한다. 로컬은 실외·혼합 새 교사 라벨 → DDAD·nuScenes 교사 기준선 → 풀 v5 로 `grid mixed soft`·`grid mixed hard` → 학습 전 학생을 네 세트로 평가. 실외 격자는 H200 에서 DDAD·nuScenes 평가까지 한다 (관리자에게 `depthlm_drive_eval.zip` 을 `/app/data` 에 올려 달라고 요청).
 
 풀 v5 는 거의 같은 이미지를 순서 뒤로 보낸 것이다(아래 풀 절). 실내 풀은 해당 이미지가 없어 v4 와 v5 가 같다. 규칙이 생기기 전에 v4 로 학습한 혼합 soft 격자는 로컬에 파일럿으로만 둔다. H200 아카이브에는 주행 세트가 없어 실외 격자는 H200 에서 학습만 한다.
 
@@ -48,7 +48,7 @@ DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Q
 | `bash run.sh check` | 가장 작은 조각 | `/app/data`·`/app/output`·작업 경로의 쓰기 가능 여부와 여유 공간, 압축을 풀 위치를 알려 준다. 1분 이내 |
 | `bash run.sh smoke` | 1 | 합성 40장 풀로 30 스텝 학습 + 3 픽셀 평가. 약 20분 |
 | `bash run.sh label <pool>` | **7** | 커밋된 라벨에 없는 픽셀만 교사로 라벨링(교사 4개 동시). `labels_<pool>.zip` 의 parquet 를 `pools/<pool>/teacher_labels.parquet` 로 커밋해야 한다 |
-| `bash run.sh grid <pool> <soft\|hard>` | **7** | 8셀 동시 학습 → 아카이브에 있는 자기 도메인 세트로 평가(iBims-1·NYUv2. 주행 세트는 없어서 실외는 학습만) → 표·그림·`results_<cond>_<pool>.zip`(어댑터 포함). 학습 약 12시간(실측 예정) |
+| `bash run.sh grid <pool> <soft\|hard>` | **7** | 8셀 동시 학습 → 아카이브에 있는 자기 도메인 세트로 평가(실내 iBims-1·NYUv2, 실외 DDAD·nuScenes. 주행 세트는 별도 `depthlm_drive_eval.zip`(580 MB)을 `/app/data` 아래에서 찾아 작업 볼륨에 풀고 SHA256 검증. 없으면 그 세트만 건너뜀) → 표·그림·`results_<cond>_<pool>.zip`(어댑터 포함). 학습 13.7시간 + 평가(large, 자기 도메인 두 세트) 약 3.5시간 (#557 실측으로 환산) |
 
 - **한 작업이 만든 것은 다음 작업이 보지 못한다**(2026-09-28 실측: `/app/output`·`/app/scratch`·작업 볼륨 모두 새로 시작). 저장소가 유일한 영속 경로라서 교사 라벨은 저장소에 커밋하고, 학습과 평가는 한 `grid` 작업 안에서 한다. `train`·`eval` 을 따로 내는 방식은 결과가 남는 로컬에서만 쓴다.
 - `grid` 는 라벨을 `/app/output/labels/<pool>/` → `/app/data/labels/<pool>/` → 저장소 `pools/<pool>/` 순서로 찾고, 격자에 필요한 픽셀을 다 덮지 못하면 학습을 거부한다.

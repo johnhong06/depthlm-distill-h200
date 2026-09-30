@@ -37,25 +37,18 @@ DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Q
 - 다른 도메인 점수는 배분·손실이 아니라 도메인 차이를 재므로 계산하지 않는다. 부정 결과도 모두 보고한다.
 - 판정 스크립트: `experiments/32_decide.py --pool <pool>` 가 한 풀의 soft·hard 결과에 규칙을 적용해 `tables/decision_<pool>.md` 를 쓴다(DDAD 차체 영역 제외 민감도 값 포함). 주장하지 않는 경우는 "세트 의존"(방향이 갈리고 하나라도 0 제외)과 "근거 없음"(모든 구간이 0 포함)으로 나눠 적는다.
 
-## H200 실행
+## 실행
 
-서비스 자체의 사용법(신청, 요청서, 컨테이너 경로, 데이터 전달, 겪은 문제)은 [H200 사용법](h200_guide_ko.md)(웹 페이지: https://johnhong06.github.io/depthlm-distill-h200/)에 정리했다.
+H200 서비스 사용법(신청, 요청서, 컨테이너 경로, 데이터 전달, 겪은 문제)은 [H200 사용법 페이지](https://johnhong06.github.io/depthlm-distill-h200/)에 정리.
 
-이슈 양식: 사용자 ID `johnhong06`, 저장소 `https://github.com/johnhong06/depthlm-distill-h200.git`, 이미지 `pytorch/pytorch:latest`(torch 가 오래되면 run.sh 가 시작할 때 2.11 로 바꾼다), 언어 `Python`, 추가 모듈 없음(run.sh 가 설치).
-
-| 명령 | GPU | 하는 일 |
+| 명령 | GPU | 내용 |
 |---|---|---|
-| `bash run.sh check` | 가장 작은 조각 | `/app/data`·`/app/output`·작업 경로의 쓰기 가능 여부와 여유 공간, 압축을 풀 위치를 알려 준다. 1분 이내 |
-| `bash run.sh smoke` | 1 | 합성 40장 풀로 30 스텝 학습 + 3 픽셀 평가. 약 20분 |
-| `bash run.sh label <pool>` | **7** | 커밋된 라벨에 없는 픽셀만 교사로 라벨링(교사 4개 동시). `labels_<pool>.zip` 의 parquet 를 `pools/<pool>/teacher_labels.parquet` 로 커밋해야 한다 |
-| `bash run.sh grid <pool> <soft\|hard>` | **7** | 8셀 동시 학습 → 아카이브에 있는 자기 도메인 세트로 평가(실내 iBims-1·NYUv2, 실외 DDAD·nuScenes. 주행 세트는 별도 `depthlm_drive_eval.zip`(580 MB)을 `/app/data` 아래에서 찾아 작업 볼륨에 풀고 SHA256 검증. 없으면 그 세트만 건너뜀) → 표·그림·`results_<cond>_<pool>.zip`(어댑터 포함). 학습 13.7시간 + 평가(large, 자기 도메인 두 세트) 약 3.5시간 (#557 실측으로 환산) |
+| `bash run.sh smoke` | 1 | 합성 풀로 30스텝 학습 + 3픽셀 평가, 약 20분 |
+| `bash run.sh label <pool>` | 7 | 커밋된 라벨에 없는 픽셀만 교사로 라벨링. 결과 parquet 는 `pools/<pool>/` 에 커밋 |
+| `bash run.sh grid <pool> <soft\|hard>` | 7 | 8셀 학습 → 풀의 평가 세트로 평가 → `results_<cond>_<pool>.zip`(checkpoints 포함) |
 
-- **한 작업이 만든 것은 다음 작업이 보지 못한다**(2026-09-28 실측: `/app/output`·`/app/scratch`·작업 볼륨 모두 새로 시작). 저장소가 유일한 영속 경로라서 교사 라벨은 저장소에 커밋하고, 학습과 평가는 한 `grid` 작업 안에서 한다. `train`·`eval` 을 따로 내는 방식은 결과가 남는 로컬에서만 쓴다.
-- `grid` 는 라벨을 `/app/output/labels/<pool>/` → `/app/data/labels/<pool>/` → 저장소 `pools/<pool>/` 순서로 찾고, 격자에 필요한 픽셀을 다 덮지 못하면 학습을 거부한다.
-- 같은 명령을 다시 내면 이어서 한다(끝난 셀·평가·라벨 조각은 건너뜀, `/app/output` 이 남아 있는 한).
-- 평가는 풀의 세트만(`EVAL_DATASETS`), large 만(`EVAL_SETS=large`; small 은 large 의 부분집합이라 거기서 골라낸다). `$DATA_ROOT/eval` 에 없는 세트는 메시지를 남기고 건너뛰며, zip 에는 어댑터가 그대로 들어간다.
-- 이슈 댓글에는 요약만(65,000자 제한), 전체 로그는 `/app/output`.
-- 데이터 아카이브(30 GB, 2 GB × 16 조각, 관리자에게 구글 드라이브로 전달)와 저장 공간 실측은 영어 README 의 접힌 절에 있다.
+- 데이터: 30 GB 아카이브(풀 이미지, 실내 평가 세트, 교사 가중치)와 566 MB 주행 평가 팩 `depthlm_drive_eval.tar`(+ `.sha256`)를 `/app/data` 아래에 두면 run.sh 가 찾아서 검증하고 푼다.
+- H200 작업 사이에는 아무것도 남지 않으므로 라벨은 저장소에 커밋하고, 격자는 한 작업 안에서 학습과 평가를 끝낸다.
 
 ## 풀
 
@@ -87,12 +80,10 @@ DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Q
 ## 로컬 실행
 
 ```bash
-bash run.sh smoke                                   # 필요한 패키지를 스스로 설치, 데이터 불필요
-DATA_ROOT=/path/to/data bash run.sh grid mixed soft  # 격자 하나 학습 + 평가
+DATA_ROOT=/path/to/data bash run.sh grid mixed soft
 DATA_ROOT=/path/to/data OUT_ROOT=/path/with/checkpoints bash run.sh eval outdoor soft   # H200 zip 의 어댑터 평가
+python experiments/32_decide.py --pool indoor --soft_root <OUT_ROOT> --hard_root <OUT_ROOT>   # 판정표
 ```
-
-`DATA_ROOT` 에는 `pool/`·`eval/`(또는 tar 조각)이 있어야 한다. 주행 세트는 원본 데이터셋에서 `experiments/41_build_ddad.py`·`experiments/43_build_nuscenes.py` 로 로컬에서 만들어 `$DATA_ROOT/eval/ddad`·`$DATA_ROOT/eval/nuscenes` 에 둔다.
 
 ## 라이선스
 

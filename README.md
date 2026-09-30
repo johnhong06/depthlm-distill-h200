@@ -82,7 +82,7 @@ single models evaluated once, so they carry no loss condition.
 | | | | hard | — | — | — | — |
 |  | 6400 | 4 | soft | — | — | — | — |
 | | | | hard | — | — | — | — |
-| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 | — |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 | 0.728 / 0.599 |
 | **student, no distillation** | | | | — | — | — | — |
 
 ### Indoor pool
@@ -128,7 +128,7 @@ single models evaluated once, so they carry no loss condition.
 | | | | hard | — | — |
 |  | 6400 | 4 | soft | — | — |
 | | | | hard | — | — |
-| **teacher, DepthLM 12B** | | | | 0.652 / 0.240 | — |
+| **teacher, DepthLM 12B** | | | | 0.652 / 0.240 | 0.728 / 0.599 |
 | **student, no distillation** | | | | — | — |
 
 ### Baselines
@@ -142,7 +142,7 @@ context rather than serving as paired comparisons.
 
 | Baseline | iBims-1 | NYUv2 | DDAD | nuScenes |
 |---|:--|:--|:--|:--|
-| Teacher, DepthLM 12B, measured | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 (z: 0.677) | — |
+| Teacher, DepthLM 12B, measured | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 (z: 0.677) | 0.728 / 0.599 (z: 0.803) |
 | Student before distillation, Qwen2.5-VL-3B, measured | — | — | — | — |
 | *paper:* DepthLM 12B (Pixtral) | 0.870 | 0.799 | 0.670 | 0.819 |
 | *paper:* DepthLM 3B (Qwen2.5-VL-3B trained on 16M ground-truth images) | 0.890 | 0.868 | 0.724 | 0.870 |

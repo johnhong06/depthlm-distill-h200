@@ -22,8 +22,8 @@ DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Q
 | 혼합 | hard | 로컬 | v5 | 2,544 px 추가 중(로컬) | 대기 | 로컬 |
 | 실내 | soft | H200 | v4 = v5 | 커밋됨 | 진행 중 | H200 |
 | 실내 | hard | H200 | v4 = v5 | 커밋됨 | 다음 | H200 |
-| 실외 | soft | H200 | v5 | 커밋됨 (5,640 px 로컬 추가) | 실내 hard 다음 | 로컬(어댑터로) |
-| 실외 | hard | H200 | v5 | 커밋됨 (5,640 px 로컬 추가) | | 로컬(어댑터로) |
+| 실외 | soft | H200 | v5 | 커밋됨 (5,640 px 로컬 추가) | 실내 hard 다음 | H200 (주행 평가 팩 필요) |
+| 실외 | hard | H200 | v5 | 커밋됨 (5,640 px 로컬 추가) | | H200 (주행 평가 팩 필요) |
 
 순서. H200 은 GPU 한 장으로 한 번에 하나: `grid indoor soft`(진행 중) → `grid indoor hard` → `grid outdoor soft` → `grid outdoor hard`. 작업이 끝날 때마다 관리자에게 `results_<cond>_<pool>.zip` 을 받고 `checkpoints/` 가 들어 있는지 확인한다. 로컬은 실외·혼합 새 교사 라벨 → DDAD·nuScenes 교사 기준선 → 풀 v5 로 `grid mixed soft`·`grid mixed hard` → 학습 전 학생을 네 세트로 평가. 실외 격자는 H200 에서 DDAD·nuScenes 평가까지 한다 (관리자에게 `depthlm_drive_eval.zip` 을 `/app/data` 에 올려 달라고 요청).
 
@@ -77,12 +77,12 @@ DepthLM(Pixtral-12B)의 절대 깊이 능력을 교사 답만 라벨로 써서 Q
 | 실내 | NYUv2 | 실내, 혼합 | 200 / 2,000 | 같은 데이터셋이지만 방 단위로 풀에서 제외 |
 | 실내 | iBims-1 | 실내, 혼합 | 100 / 3,000 | 풀에 없음 |
 | 주행 | DDAD | 주행, 혼합 | 250 / 2,500 | 다른 차량·국가, 낮. 풀에 없음 |
-| 주행 | nuScenes | 주행, 혼합 | 250 / 2,500 | DepthLM 평가 구간: 싱가포르 한 저녁 43장면, **전부 밤**, 13장면 비 |
+| 주행 | nuScenes | 주행, 혼합 | 250 / 2,500 | DepthLM 의 실제 평가 구간 nuScenes v1.0-mini: 10장면(낮 7, 밤 3), 교사 학습에서 제외 |
 
 - GT 는 모두 카메라 중심까지의 유클리드 거리(프롬프트가 묻는 값). DepthLM 의 DDAD·nuScenes 스크립트는 z 깊이를 써서 두 주행 세트는 z 도 저장하고, 교사를 논문값(DDAD 0.670, nuScenes 0.819)과 비교할 때만 쓴다. ETH3D 는 판정에 쓰는 풀이 없어 더 평가하지 않는다.
 - DDAD·nuScenes 는 DepthLM 논문 표에 학습 전 Qwen2.5-VL-3B, 같은 백본을 GT 1,600만 장으로 학습한 DepthLM-3B, 순수 비전 모델과 함께 있어 논문 수치와 나란히 놓을 수 있다. 둘 다 DepthLM 선정 스크립트를 따르고 250장 × 10픽셀(시드 0, 마커용 테두리 10 px 제외)로 부분 표본을 뽑는다 — 같은 값을 다른 무작위 픽셀로 추정한다.
 - DDAD(`experiments/41_build_ddad.py`): val 50장면, 카메라 6대, LiDAR 투영(픽셀당 최근접), 장면당 (샘플, 카메라) 5쌍. 공식 절차는 자차를 가리지 않아 전면이 아닌 카메라 아래쪽 1/4 의 픽셀 약 절반이 차체 위다 → 논문과 비교하려고 그대로 두고, 그 영역을 뺀 민감도 값을 함께 보고한다.
-- nuScenes(`experiments/43_build_nuscenes.py`): 샘플 목록 마지막 5 %(1,708 샘플 — 교사가 학습하지 않은 유일한 nuScenes 장면), 카메라 6대, 캘리브레이션만으로 투영(DepthLM 처럼 차량 자세 보정 없음), 10,248 쌍 중 250. 1 m 이내 점을 빼지 않아(공식과 동일) 3픽셀이 자차에서 튄 점이다.
+- nuScenes(`experiments/43_build_nuscenes.py`): v1.0-mini 10장면(404 샘플) × 카메라 6대. 공개 `curate_nuscenes_eval.py` 는 trainval 마지막 5 % 를 쓰지만, 제1저자가 [이슈 #17](https://github.com/facebookresearch/DepthLM_Official/issues/17)에서 공개 파일의 실수이고 실제 평가는 mini 였다고 확인했다(학습 스크립트도 mini 장면을 뺀다). 처음 만든 공개 구간(43장면, 전부 밤)에서는 교사가 0.640 으로 논문 0.819 와 맞지 않았고, 이것으로 차이를 찾았다. 2,424 쌍 중 250쌍(밤 84장).
 
 ## 로컬 실행
 

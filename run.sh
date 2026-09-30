@@ -390,6 +390,19 @@ PYE
     fi
     if [ -n "$DE" ]; then mkdir -p "$DATA_ROOT/eval" && ln -sfn "$DE" "$DATA_ROOT/eval/$ds" && say "[eval] $ds: $DE 를 $DATA_ROOT/eval/$ds 로 연결 ($(wc -l < "$DE/${ds}_val.jsonl") 장)" || say "!!! [eval] $ds: $DATA_ROOT/eval 에 연결 실패 (쓰기 권한)"; fi; done
 fi
+if [ "$MODE" != train ]; then   # 주행 평가 세트(DDAD·nuScenes)는 아카이브에 없다 → 관리자가 /app/data 에 넣어 준 depthlm_drive_eval.tar 를 찾아 작업 공간에 풀고 연결한다
+  MISS=""; for ds in $EVAL_DATASETS; do [ -f "$DATA_ROOT/eval/$ds/${ds}_val.jsonl" ] || MISS="$MISS $ds"; done
+  if [ -n "$MISS" ]; then
+    DT=""; for d in /app/data "${DATA_SRC:-}"; do [ -n "$d" ] && [ -d "$d" ] && [ -z "$DT" ] && DT=$(find "$d" -maxdepth 4 -name "depthlm_drive_eval.tar" 2>/dev/null | head -1 || true); done
+    if [ -n "$DT" ]; then
+      DX=$WORK_ROOT/drive_eval; mkdir -p "$DX"
+      if [ -f "$DT.sha256" ] && ! (cd "$(dirname "$DT")" && sha256sum -c "$(basename "$DT").sha256" >/dev/null 2>&1); then say "!!! [eval] $DT 체크섬 불일치 — 주행 세트를 쓰지 않는다"
+      else
+        tar -xf "$DT" -C "$DX" && for ds in $MISS; do [ -f "$DX/$ds/${ds}_val.jsonl" ] && ln -sfn "$DX/$ds" "$DATA_ROOT/eval/$ds" 2>/dev/null && say "[eval] 주행 평가 세트 연결: $ds ← $DT"; done
+      fi
+    fi
+  fi
+fi
 if [ "$MODE" != train ]; then   # 이 환경에 없는 평가 세트는 건너뛴다 (예: H200 아카이브에는 주행 세트가 없다 → 어댑터를 zip 으로 받아 로컬에서 평가)
   AV=""; for ds in $EVAL_DATASETS; do if [ -f "$DATA_ROOT/eval/$ds/${ds}_val.jsonl" ]; then AV="$AV $ds"; else say "[eval] $ds: $DATA_ROOT/eval/$ds 에 평가 세트가 없어 이 작업에서는 건너뜀 (어댑터로 로컬에서 평가)"; fi; done; EVAL_DATASETS=${AV# }
   say "[eval] 평가 세트: ${EVAL_DATASETS:-없음 → 학습과 결과 zip(어댑터 포함)만} | 세트 종류: $EVAL_SETS"; fi

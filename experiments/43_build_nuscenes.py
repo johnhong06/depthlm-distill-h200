@@ -1,6 +1,6 @@
 """nuScenes 평가 세트 — DepthLM 공식 절차(third_party/DepthLM_Official/utils/curate_nuscenes_eval.py)를 따른 부분 표본.
 
-공식 절차: v1.0-trainval 의 sample 목록 중 마지막 5 % (int(len·0.95) 부터 끝까지, 1,708 샘플 / 43 장면) × 카메라 6대 전부,
+공식 절차: 평가 = v1.0-mini 10장면 전부(학습에서 제외, DepthLM_Official 이슈 #17 저자 답변. 공개 스크립트의 trainval 마지막 5 % 는 공개 시 실수) × 카메라 6대 전부,
 LIDAR_TOP 키프레임 점을 캘리브레이션(센서→차량)만으로 카메라에 투영(차량 자세·시간차 보정 없음), 픽셀마다 가장 가까운 점,
 깊이 0 이 아닌 픽셀에서 100 개 무작위(시드 없음), GT = z 깊이.
 여기서는 (샘플, 카메라) 쌍 10,248 개 중 250 쌍을 무작위로 (시드 0), 이미지당 10 픽셀, 마커를 그릴 수 있도록 테두리 10 px 제외.
@@ -21,15 +21,16 @@ def quat(q):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--root", required=True); ap.add_argument("--out", required=True); ap.add_argument("--list", default="")
-    ap.add_argument("--n", type=int, default=250); ap.add_argument("--px", type=int, default=10); ap.add_argument("--seed", type=int, default=0)
-    a = ap.parse_args(); root, out = os.path.expanduser(a.root), os.path.expanduser(a.out); M = f"{root}/v1.0-trainval"
+    ap.add_argument("--version", default="v1.0-mini", help="v1.0-mini = 논문 실제 평가(이슈 #17), v1.0-trainval = 공개 스크립트의 마지막 5 퍼센트"); ap.add_argument("--n", type=int, default=250); ap.add_argument("--px", type=int, default=10); ap.add_argument("--seed", type=int, default=0)
+    a = ap.parse_args(); root, out = os.path.expanduser(a.root), os.path.expanduser(a.out); M = f"{root}/{a.version}"
     sample = json.load(open(f"{M}/sample.json")); sd = json.load(open(f"{M}/sample_data.json"))
     cs = {c["token"]: c for c in json.load(open(f"{M}/calibrated_sensor.json"))}; sen = {s["token"]: s["channel"] for s in json.load(open(f"{M}/sensor.json"))}
     scene = {s["token"]: s["name"] for s in json.load(open(f"{M}/scene.json"))}
     key = {}   # (sample_token, channel) -> 키프레임 sample_data
     for d in sd:
         if d["is_key_frame"]: key[(d["sample_token"], sen[cs[d["calibrated_sensor_token"]]["sensor_token"]])] = d
-    ev = sample[int(len(sample) * 0.95):]   # 공식: range(int(len(nusc.sample) * 0.95), len(nusc.sample))
+    # 논문 실험은 v1.0-mini 10장면 전부로 평가했고 학습에서는 뺐다(DepthLM_Official 이슈 #17, 저자 답변). 공개 스크립트의 trainval 마지막 5 % 는 공개 시 실수
+    ev = sample if a.version == "v1.0-mini" else sample[int(len(sample) * 0.95):]
     pairs = [(s["token"], c) for s in ev for c in CAMS]
     rng = np.random.default_rng(a.seed); pick = [pairs[i] for i in sorted(rng.choice(len(pairs), size=a.n, replace=False))]
     print(f"평가 샘플 {len(ev)} (장면 {len({s['scene_token'] for s in ev})}), (샘플, 카메라) 쌍 {len(pairs)} 중 {len(pick)}", flush=True)

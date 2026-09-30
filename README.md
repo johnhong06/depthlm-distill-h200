@@ -26,19 +26,19 @@ The decision rule was fixed before any grid finished and is stated under [Result
 | mixed | soft | local | v5 | committed | cell by cell | 1/8 |
 | mixed | hard | local | v5 | committed | cell by cell | 1/8 |
 | indoor | soft | H200 | v4 = v5 | committed | done | done (8/8) |
-| indoor | hard | H200 | v4 = v5 | committed | next | on H200 |
-| outdoor | soft | H200 | v5 | committed (5,640 px added locally) | after indoor hard | local, from the adapters |
-| outdoor | hard | H200 | v5 | committed (5,640 px added locally) | | local, from the adapters |
+| indoor | hard | H200 | v4 = v5 | committed | running | on H200 |
+| outdoor | soft | H200 | v5 | committed (5,640 px added locally) | after indoor hard | on H200 (needs the driving pack) |
+| outdoor | hard | H200 | v5 | committed (5,640 px added locally) | | on H200 (needs the driving pack) |
 
-Order of work. On H200, one job at a time on a whole GPU: `grid indoor soft` (running) → `grid indoor hard` →
-`grid outdoor soft` → `grid outdoor hard`; after each job, ask the administrator for its `results_<cond>_<pool>.zip`,
-which must contain `checkpoints/`. Locally: the new outdoor and mixed teacher labels, then the DDAD and nuScenes teacher
-baselines, then `grid mixed soft` and `grid mixed hard` on pool v5, then DDAD and nuScenes for the outdoor adapters from
-the H200 zips and the zero-shot student on all four sets.
+Order of work. On H200, one job at a time on a whole GPU: `grid indoor soft` (done) → `grid indoor hard` (running) →
+`grid outdoor soft` → `grid outdoor hard`, the outdoor ones evaluated on H200 once the driving pack is in `/app/data`;
+after each job, ask the administrator for its `results_<cond>_<pool>.zip`, which must contain `checkpoints/`. Locally:
+the teacher on nuScenes mini, then `grid mixed soft` and `grid mixed hard` on pool v5 cell by cell, then the zero-shot
+student on all four sets.
 
 Pool v5 moves near-duplicate images to the end of the image order ([Pools](#pools)). The indoor pool has none, so its v4
 and v5 are the same. A first mixed soft grid trained on v4, before the rule existed, is kept locally as a pilot and not
-reported. The H200 archive has no driving sets, so the outdoor grids only train there.
+reported. The driving sets reach H200 as a separate pack (see [Running on Aerodrone H200](#running-on-aerodrone-h200)).
 
 ## Results
 
@@ -66,8 +66,8 @@ single models evaluated once, so they carry no loss condition.
 
 | Budget | N | k | Loss | iBims-1 | NYUv2 | DDAD | nuScenes |
 |---:|---:|---:|:--|:--|:--|:--|:--|
-| **400** | 400 | 1 | soft | 0.344 / 0.363 | 0.366 / 0.313 | 0.163 / 0.619 | 0.175 / 0.765 |
-| | | | hard | 0.338 / 0.360 | 0.393 / 0.307 | 0.159 / 0.646 | 0.183 / 0.711 |
+| **400** | 400 | 1 | soft | 0.344 / 0.363 | 0.366 / 0.313 | 0.163 / 0.619 | — |
+| | | | hard | 0.338 / 0.360 | 0.393 / 0.307 | 0.159 / 0.646 | — |
 | **1,600** | 400 | 4 | soft | — | — | — | — |
 | | | | hard | — | — | — | — |
 |  | 1600 | 1 | soft | — | — | — | — |
@@ -82,7 +82,7 @@ single models evaluated once, so they carry no loss condition.
 | | | | hard | — | — | — | — |
 |  | 6400 | 4 | soft | — | — | — | — |
 | | | | hard | — | — | — | — |
-| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 | 0.581 / 0.694 |
+| **teacher, DepthLM 12B** | | | | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 | — |
 | **student, no distillation** | | | | — | — | — | — |
 
 ### Indoor pool
@@ -128,7 +128,7 @@ single models evaluated once, so they carry no loss condition.
 | | | | hard | — | — |
 |  | 6400 | 4 | soft | — | — |
 | | | | hard | — | — |
-| **teacher, DepthLM 12B** | | | | 0.652 / 0.240 | 0.581 / 0.694 |
+| **teacher, DepthLM 12B** | | | | 0.652 / 0.240 | — |
 | **student, no distillation** | | | | — | — |
 
 ### Baselines
@@ -142,7 +142,7 @@ context rather than serving as paired comparisons.
 
 | Baseline | iBims-1 | NYUv2 | DDAD | nuScenes |
 |---|:--|:--|:--|:--|
-| Teacher, DepthLM 12B, measured | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 (z: 0.677) | 0.581 / 0.694 (z: 0.640) |
+| Teacher, DepthLM 12B, measured | 0.811 / 0.141 | 0.889 / 0.122 | 0.652 / 0.240 (z: 0.677) | — |
 | Student before distillation, Qwen2.5-VL-3B, measured | — | — | — | — |
 | *paper:* DepthLM 12B (Pixtral) | 0.870 | 0.799 | 0.670 | 0.819 |
 | *paper:* DepthLM 3B (Qwen2.5-VL-3B trained on 16M ground-truth images) | 0.890 | 0.868 | 0.724 | 0.870 |
@@ -176,7 +176,7 @@ code execution request" issue as follows.
 | `bash run.sh check` | smallest slice | Reports, for `/app/data`, `/app/output` and the work root, whether it is writable and how much space is free, and where the archive would be extracted. No GPU, under a minute. |
 | `bash run.sh smoke` | 1 (18 GB slice) | Trains 30 steps on the bundled synthetic 40-image pool and evaluates 3 pixels. ~20 min. |
 | `bash run.sh label <pool>` | **7** (whole GPU) | Teacher inference for the pixels the committed labels do not cover yet, 4 teacher processes. Writes `labels_<pool>.zip`, whose parquet has to be committed to `pools/<pool>/teacher_labels.parquet`. |
-| `bash run.sh grid <pool> <soft\|hard>` | **7** (whole GPU) | Trains the 8 cells concurrently, evaluates them on the pool's own sets that are in the archive (iBims-1 and NYUv2; the driving sets are not, so an outdoor grid only trains), then writes tables, figures and `results_<cond>_<pool>.zip` with the adapters. Training ~12 h, to be measured. |
+| `bash run.sh grid <pool> <soft\|hard>` | **7** (whole GPU) | Trains the 8 cells concurrently, evaluates them on the pool's own sets, then writes tables, figures and `results_<cond>_<pool>.zip` with the adapters. Measured on indoor soft: training 13.8 h. |
 
 What the service does and does not keep decides how the jobs are split:
 
@@ -195,6 +195,10 @@ What the service does and does not keep decides how the jobs are split:
   administrator places anywhere under `/app/data`, and the job unpacks it into the work volume, checks it against its
   `SHA256SUMS` and links it into `$DATA_ROOT/eval`. A set that is still missing is skipped with a message, and the zip
   still carries the adapters.
+- The driving sets (DDAD, nuScenes) are not in the 30 GB archive. They are a separate 566 MB tar,
+  `depthlm_drive_eval.tar` with `depthlm_drive_eval.tar.sha256`, which the administrator puts anywhere under `/app/data`;
+  `run.sh` finds it, checks the checksum, unpacks it into the work volume and links the two sets. Without it an outdoor
+  grid only trains and packs its adapters.
 - Stdout is a summary only (the issue report is capped at 65,000 characters); full logs go to `/app/output`.
 
 ### Outputs (`/app/output`)
@@ -353,7 +357,7 @@ batch 1 × accumulation 8, 2 epochs, seed fixed. Metric: δ1 (max(p/g, g/p) < 1.
 | Indoor | NYUv2 | indoor and mixed pools | 200 / 2,000 | same dataset, rooms excluded from the pools (pool v4) | Kinect |
 | Indoor | iBims-1 | indoor and mixed pools | 100 / 3,000 | not in any pool | laser scan |
 | Driving | DDAD | driving and mixed pools | 250 / 2,500 | different vehicle and countries, daytime; not in any pool | LiDAR |
-| Driving | nuScenes | driving and mixed pools | 250 / 2,500 | DepthLM's evaluation split: 43 scenes of one evening in Singapore, all at night, 13 in rain; not in any pool | LiDAR |
+| Driving | nuScenes | driving and mixed pools | 250 / 2,500 | DepthLM's actual evaluation split, nuScenes v1.0-mini: 10 scenes (7 day, 3 night) excluded from the teacher's training; not in any pool | LiDAR |
 
 Ground truth is the Euclidean distance from the camera centre to the point, the quantity the prompt asks for, in every
 set. DepthLM's DDAD and nuScenes scripts use z-depth instead, so both driving sets also store z-depth, used only to
@@ -374,13 +378,13 @@ quarter of those cameras, roughly half lie on the hood or on body panels reflect
 carry the depth of the ground behind the car. The DDAD column keeps these pixels to stay comparable with the published
 numbers, and a sensitivity value without the lower quarter of the non-front cameras is reported beside it.
 
-nuScenes (`experiments/43_build_nuscenes.py`) follows `curate_nuscenes_eval.py`: the last 5 % of the trainval sample list
-(1,708 samples, the only nuScenes scenes the teacher was not trained on) with all six cameras, the top LiDAR projected with
-the sensor calibrations only (no ego-pose correction, as in DepthLM), the nearest point per pixel, and pixels drawn at
-random from those with depth; here 250 of the 10,248 (sample, camera) pairs are drawn. Because the sample list is ordered
-by scene, this split is 43 consecutive scenes recorded on one evening, all at night and 13 in rain, so the nuScenes
-column measures night-time driving. As in the official procedure, points closer than 1 m are not removed: three of the
-2,500 pixels carry depths of 0.1 to 0.2 m from returns off the ego vehicle.
+nuScenes (`experiments/43_build_nuscenes.py`) uses v1.0-mini, all 10 scenes (404 samples) and all six cameras, which is what the
+paper evaluated: the released `curate_nuscenes_eval.py` takes the last 5 % of the trainval list instead, and the first
+author confirmed in [issue #17](https://github.com/facebookresearch/DepthLM_Official/issues/17) that this was a mistake
+in the released file, while the training script skips the mini scenes. We first built the released split (43
+consecutive scenes, all at night) and measured the teacher at 0.640 against the paper's 0.819; no 10-scene subset of it
+reaches the paper, which is how the mismatch was found. Projection follows the script (sensor calibrations only, nearest
+point per pixel, points under 1 m kept); 250 of the 2,424 (sample, camera) pairs are drawn, 84 of them at night.
 
 Measured on an RTX PRO 4500: 0.46 s per training step, ≈10 GB VRAM per cell; teacher labeling 0.8–1.5 s per pixel,
 ≈30 GB VRAM. H200 timings are to be measured.
